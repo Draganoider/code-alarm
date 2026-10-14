@@ -1,0 +1,63 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { tempDir } from "./helpers.js";
+
+const MAIN = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "main.js");
+
+function run(args: string[], input = "", home = tempDir()) {
+  return spawnSync(process.execPath, [MAIN, ...args], {
+    input,
+    encoding: "utf8",
+    env: { ...process.env, CODE_ALARM_HOME: home },
+    timeout: 20_000,
+  });
+}
+
+test("hooks print nothing and exit 0, whatever they're given", () => {
+  // Claude Code adds a UserPromptSubmit hook's stdout to the prompt, and Codex reads a
+  // PermissionRequest hook's stdout as a decision: a hook must never print.
+  for (const agent of ["claude", "codex", "nobody"]) {
+    for (const input of ["", "garbage", JSON.stringify({ hook_event_name: "UserPromptSubmit", cwd: "/" }), JSON.stringify({ hook_event_name: "PermissionRequest" })]) {
+      const result = run(["hook", agent], input);
+      assert.equal(result.status, 0, `${agent} ${input}`);
+      assert.equal(result.stdout, "", `${agent} ${input}`);
+    }
+  }
+});
+
+test("signals without arming say so and exit 0", () => {
+  const result = run(["done"]);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /Not armed here/);
+});
+
+test("arm and test refuse politely before init", () => {
+  for (const command of ["arm", "test"]) {
+    const result = run([command]);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /code-alarm init/);
+  }
+});
+
+test("init, then arm, status and disarm", () => {
+  const home = tempDir();
+  assert.equal(run(["init", "--topic", "code-alarm-test-topic"], "", home).status, 0);
+  assert.match(run(["arm", "--for", "2h"], "", home).stdout, /^Armed /);
+  const status = run(["status"], "", home).stdout;
+  assert.match(status, /Transport: ntfy, https:\/\/ntfy\.sh, topic code-alarm-tes…/);
+  assert.match(status, /Armed:/);
+  assert.match(run(["disarm"], "", home).stdout, /Disarmed this folder/);
+  assert.match(run(["status"], "", home).stdout, /Nothing is armed/);
+});
+
+test("bad durations are refused", () => {
+  const home = tempDir();
+  run(["init"], "", home);
+  for (const args of [["arm", "--for", "2 days"], ["arm", "--for", "25h"], ["nap"], ["nap", "soon"]]) {
+    const result = run(args, "", home);
+    assert.equal(result.status, 1, args.join(" "));
+  }
+});
