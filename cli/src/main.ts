@@ -5,7 +5,7 @@ import { DEFAULT_NTFY_SERVER, ConfigError, isValidTopic, loadConfig, newTopic, s
 import { decodeEvent, logLine, recentLog, sendDetached, sendNow } from "./deliver.js";
 import { HOUR, MAX_ARM_MS, formatDuration, parseDuration } from "./duration.js";
 import { type Agent, buildEvent, labelFor } from "./events.js";
-import { type HookAgent, type SignalKind, runHook, runSignal } from "./hook.js";
+import { type HookAgent, type SignalKind, runHook, runSignal, sessionFromEnv } from "./hook.js";
 import { codexInstalled, installCodex, uninstallCodex } from "./install.js";
 import { alarmHome } from "./paths.js";
 import { skillMarkdown } from "./skill.js";
@@ -47,7 +47,11 @@ async function readStdin(timeoutMs = 3000): Promise<string> {
   if (process.stdin.isTTY) return "";
   return new Promise((done) => {
     let data = "";
-    const timer = setTimeout(() => done(data), timeoutMs);
+    const timer = setTimeout(() => {
+      // An agent that never closes stdin mustn't keep the hook alive (and the agent waiting).
+      process.stdin.destroy();
+      done(data);
+    }, timeoutMs);
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (chunk) => (data += chunk));
     process.stdin.on("end", () => {
@@ -103,8 +107,9 @@ export async function main(argv: string[]): Promise<number> {
         args: rest,
         options: { server: { type: "string" }, topic: { type: "string" }, token: { type: "string" }, force: { type: "boolean" } },
       });
-      const existing = loadConfig(home);
-      if (existing && !values.force) {
+      // --force starts over without reading the old config, which may be the broken thing.
+      const existing = values.force ? null : loadConfig(home);
+      if (existing) {
         console.log(`Already set up: ntfy topic ${existing.ntfy.topic} on ${existing.ntfy.server}.`);
         console.log("Run `code-alarm init --force` to start over with a new topic.");
         return 0;
@@ -200,7 +205,8 @@ Then connect your agent:
       const config = loadConfig(home);
       console.log(
         config
-          ? `Transport: ntfy, ${config.ntfy.server}, topic ${config.ntfy.topic.slice(0, 14)}…${config.ntfy.token ? " (with token)" : ""}`
+          ? // Never any part of the topic: people paste this output into bug reports.
+            `Transport: ntfy, ${config.ntfy.server}, topic set${config.ntfy.token ? ", with a token" : ""}`
           : "Not set up: run `code-alarm init`.",
       );
       const now = Date.now();
@@ -221,7 +227,8 @@ Then connect your agent:
     case "needs-you":
     case "failed": {
       const kind: SignalKind = command === "needs-you" ? "needs_input" : command;
-      const result = await runSignal(kind, detectAgent(process.env), deps);
+      const agent = detectAgent(process.env);
+      const result = await runSignal(kind, agent, deps, sessionFromEnv(agent, process.env));
       console.log(result.message);
       return 0;
     }

@@ -28,4 +28,10 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
   - the Claude Code skill pre-approves them (`allowed-tools`);
   - `install codex` writes `~/.codex/rules/code-alarm.rules`.
 
-  If an agent still asks to run `code-alarm done`, that request counts as the signal.
+  If an agent still asks to run `code-alarm done`, that request counts as the signal. Only a
+  command that runs code-alarm itself counts, not text that mentions it.
+- "Signalled this turn" is kept per agent session, and a project arming is claimed before its
+  alert is sent: one session never silences another's alert, and two racing hooks send one alert.
+- `install codex` backs up a rules file or skill it didn't write, and refuses a folder it can't
+  quote safely; `uninstall codex` removes only its own files. The npm package includes the
+  license and README. `status` never shows the topic.

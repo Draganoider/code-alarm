@@ -1,6 +1,8 @@
 {
   "name": "code-alarm",
-  "description": "Code Alarm: a real alarm on your phone when your coding agent finishes or needs you.",
+  "metadata": {
+    "description": "Code Alarm: a real alarm on your phone when your coding agent finishes or needs you."
+  },
   "owner": {
     "name": "Yevhen Mishchenko",
     "url": "https://github.com/Draganoider"

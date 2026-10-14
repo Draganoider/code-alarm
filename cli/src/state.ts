@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { Kind, Level } from "./events.js";
 import { writeFileAtomic } from "./fsutil.js";
@@ -42,15 +42,23 @@ export function armProject(home: string, dir: string, until: number, now: number
   const arming: Arming = { kind: "project", level, dir: resolve(dir), armedAt: now, until };
   const key = keyFor(dir);
   writeFileAtomic(join(armedDir(home), `${key}.json`), JSON.stringify(arming));
-  clearSignaled(home, key);
+  startFresh(home, key);
   return { ...arming, key };
 }
 
 export function armNap(home: string, until: number, now: number, level: Level = "alarm"): FoundArming {
   const arming: Arming = { kind: "nap", level, armedAt: now, until };
   writeFileAtomic(join(armedDir(home), `${NAP_KEY}.json`), JSON.stringify(arming));
-  clearSignaled(home, NAP_KEY);
+  startFresh(home, NAP_KEY);
   return { ...arming, key: NAP_KEY };
+}
+
+/** A new arming starts clean: no signal and no rate limit carried over from the last one. */
+function startFresh(home: string, key: string): void {
+  clearSignaled(home, key);
+  const dir = join(home, "sent");
+  if (!existsSync(dir)) return;
+  for (const file of readdirSync(dir)) if (file.startsWith(`${key}-`)) rmSync(join(dir, file), { force: true });
 }
 
 /** Every arming still in force, after deleting the expired ones. */
@@ -91,9 +99,22 @@ export function findArming(home: string, cwd: string, now: number): FoundArming 
   return best ?? armings.find((arming) => arming.kind === "nap") ?? null;
 }
 
-/** A project arming is one-shot: its first end-of-task alert ends it. A nap runs until it expires. */
-export function consume(home: string, arming: FoundArming): void {
-  if (arming.kind === "project") rmSync(join(armedDir(home), `${arming.key}.json`), { force: true });
+/**
+ * A project arming is one-shot: its first end-of-task alert ends it. Claims it before sending, so
+ * when two hooks race for it, only the one whose rename wins sends; false for the loser. A nap
+ * runs until it expires, so it's never used up.
+ */
+export function claim(home: string, arming: FoundArming): boolean {
+  if (arming.kind !== "project") return true;
+  const path = join(armedDir(home), `${arming.key}.json`);
+  const claimed = `${path}.${process.pid}.${Date.now()}.claimed`;
+  try {
+    renameSync(path, claimed);
+  } catch {
+    return false;
+  }
+  rmSync(claimed, { force: true });
+  return true;
 }
 
 export function disarmProject(home: string, dir: string): boolean {
@@ -109,6 +130,14 @@ export function disarmAll(home: string): number {
   const files = readdirSync(dir).filter((file) => file.endsWith(".json"));
   for (const file of files) rmSync(join(dir, file), { force: true });
   return files.length;
+}
+
+/**
+ * Where "signalled this turn" is kept: per agent session, so one session's signal never silences
+ * another's Stop, whichever arming each one finds. Without a session ID, per arming.
+ */
+export function signalKey(armingKey: string, sessionId?: string): string {
+  return sessionId ? `session-${createHash("sha256").update(sessionId).digest("hex").slice(0, 16)}` : armingKey;
 }
 
 /** The agent sent an explicit signal this turn, so the Stop hook mustn't add a vague "stopped". */

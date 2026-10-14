@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
 import { HOUR } from "../src/duration.js";
-import { NEEDS_INPUT_WINDOW_MS, ownSubcommand, runHook, runSignal } from "../src/hook.js";
+import { NEEDS_INPUT_WINDOW_MS, ownSubcommand, runHook, runSignal, sessionFromEnv } from "../src/hook.js";
 import { armNap, armProject, findArming } from "../src/state.js";
 import { payload, setup } from "./helpers.js";
 
@@ -138,6 +138,33 @@ test("recognising code-alarm's own commands", () => {
   assert.equal(ownSubcommand("rm -rf /code-alarm/done"), null);
   assert.equal(ownSubcommand("my-code-alarm done"), null);
   assert.equal(ownSubcommand(undefined), null);
+  // Codex on Windows runs everything through PowerShell; the hook may see the wrapper.
+  const wrapped = String.raw`"C:\Users\me\.cache\codex-runtimes\pwsh.exe" -Command "node \"C:/Users/me/AppData/Roaming/code-alarm/bin/code-alarm.mjs\" done"`;
+  assert.equal(ownSubcommand(wrapped), "done");
+  assert.equal(ownSubcommand(`bash -lc 'code-alarm needs-you'`), "needs-you");
+  assert.equal(ownSubcommand("code-alarm done;"), "done");
+  assert.equal(ownSubcommand("code-alarm done 2>&1"), "done");
+  assert.equal(ownSubcommand(`& "C:\\Users\\me\\code-alarm.cmd" failed`), "failed");
+  assert.equal(ownSubcommand("npx -y code-alarm status"), "status");
+});
+
+test("text that only mentions code-alarm isn't code-alarm's own command", () => {
+  assert.equal(ownSubcommand("echo code-alarm done"), null);
+  assert.equal(ownSubcommand(`git commit -m "make code-alarm done faster"`), null);
+  assert.equal(ownSubcommand(`echo 'a; code-alarm done now'`), null);
+  assert.equal(ownSubcommand(`pwsh -Command "Write-Output 'code-alarm done'"`), null);
+  // Our command chained with something else: the approval is about the other command too.
+  assert.equal(ownSubcommand("npm test && code-alarm done"), null);
+  assert.equal(ownSubcommand("cd /work"), null);
+});
+
+test("approving a command that only mentions code-alarm is a normal needs_input", async () => {
+  const { home, project, sent, clock, deps } = setup();
+  armProject(home, project, clock.now + HOUR, clock.now);
+  const command = `git commit -m "code-alarm done: tidy up"`;
+  await runHook("codex", payload("PermissionRequest", { cwd: project, tool_input: { command } }), deps());
+  assert.deepEqual(sent.map((e) => e.kind), ["needs_input"]);
+  assert.ok(findArming(home, project, clock.now), "still armed");
 });
 
 test("StopFailure rings failed", async () => {
@@ -163,6 +190,57 @@ test("the same session, turn and kind give the same event ID", async () => {
   await runHook("claude", payload("Stop", { cwd: a.project }), a.deps());
   await runHook("claude", payload("Stop", { cwd: b.project }), b.deps());
   assert.equal(a.sent[0]!.id, b.sent[0]!.id);
+});
+
+test("one session's signal never silences another session's Stop (nap mode)", async () => {
+  const { home, root, sent, clock, deps } = setup();
+  armNap(home, clock.now + HOUR, clock.now);
+  const a = join(root, "a");
+  const b = join(root, "b");
+  await runSignal("needs_input", "codex", deps(a), "session-a");
+  await runHook("codex", payload("Stop", { cwd: b, session_id: "session-b", turn_id: "t1" }), deps(b));
+  assert.deepEqual(sent.map((e) => e.kind), ["needs_input", "stopped"]);
+  // B's next prompt doesn't clear A's signal either: A's Stop is still skipped.
+  await runHook("codex", payload("UserPromptSubmit", { cwd: b, session_id: "session-b" }), deps(b));
+  await runHook("codex", payload("Stop", { cwd: a, session_id: "session-a", turn_id: "t2" }), deps(a));
+  assert.equal(sent.length, 2);
+});
+
+test("done ends the turn's alerts even when a nap also covers the folder", async () => {
+  const { home, project, sent, clock, deps } = setup();
+  armNap(home, clock.now + HOUR, clock.now);
+  armProject(home, project, clock.now + HOUR, clock.now);
+  await runSignal("done", "claude-code", deps(), "sess-1");
+  await runHook("claude", payload("Stop", { cwd: project, session_id: "sess-1" }), deps());
+  assert.deepEqual(sent.map((e) => e.kind), ["done"]);
+});
+
+test("two alerts racing for one project arming: only the first claim sends", async () => {
+  const { home, project, sent, clock, deps } = setup();
+  armProject(home, project, clock.now + HOUR, clock.now);
+  // Both hooks run concurrently; each finds the arming before either uses it up.
+  await Promise.all([
+    runHook("claude", payload("Stop", { cwd: project, session_id: "s1" }), deps()),
+    runSignal("done", "claude-code", deps(), "s2"),
+  ]);
+  assert.equal(sent.length, 1);
+});
+
+test("arming again resets the needs_input rate limit", async () => {
+  const { home, project, sent, clock, deps } = setup();
+  const ask = () => runHook("claude", payload("PermissionRequest", { cwd: project, tool_input: { command: "rm -rf build" } }), deps());
+  armProject(home, project, clock.now + HOUR, clock.now);
+  await ask();
+  clock.now += 1000;
+  armProject(home, project, clock.now + HOUR, clock.now);
+  await ask();
+  assert.deepEqual(sent.map((e) => e.kind), ["needs_input", "needs_input"]);
+});
+
+test("the session for a signal comes from the agent's environment", () => {
+  assert.equal(sessionFromEnv("claude-code", { CLAUDE_CODE_SESSION_ID: "c1" }), "c1");
+  assert.equal(sessionFromEnv("codex", { CODEX_THREAD_ID: "t1", CODEX_SESSION_ID: "t1" }), "t1");
+  assert.equal(sessionFromEnv("cli", { CLAUDE_CODE_SESSION_ID: "c1" }), undefined);
 });
 
 test("garbage input never throws", async () => {

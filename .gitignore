@@ -5,6 +5,9 @@ node_modules/
 # tsc's test build. The bundled CLI in cli/dist/ and plugins/*/bin/ IS committed: plugin installs
 # copy the repository as it is, with no build step.
 cli/build/
+# Copied from the repository root by `npm pack` (prepack), so the npm package carries them.
+cli/LICENSE
+cli/README.md
 coverage/
 *.tsbuildinfo
 npm-debug.log*

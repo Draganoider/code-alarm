@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { writeFileAtomic } from "./fsutil.js";
 import { skillMarkdown } from "./skill.js";
@@ -26,9 +26,18 @@ export function codexPaths(alarmHome: string, userHome: string): CodexPaths {
 
 export const CODEX_EVENTS = ["Stop", "PermissionRequest", "UserPromptSubmit"] as const;
 
+const slashes = (path: string) => path.replace(/\\/g, "/");
+
 export function codexCommand(cli: string): string {
-  return `node "${cli.replace(/\\/g, "/")}" hook codex`;
+  return `node "${slashes(cli)}" hook codex`;
 }
+
+/** The hook and the skill put the path in double quotes, where these characters would break or expand. */
+const UNSAFE_IN_QUOTES = /["$`]/;
+
+/** Marks a rules file or skill as ours, so we never overwrite or delete someone else's. */
+const RULES_MARK = "Written by `code-alarm install codex`";
+const SKILL_MARK = "# Code Alarm\n";
 
 /**
  * A Codex rules file (https://developers.openai.com/codex/rules) that lets the agent run Code
@@ -36,16 +45,18 @@ export function codexCommand(cli: string): string {
  * approval nobody is there to give. `install`, `init` and `test` still ask.
  */
 export function codexRules(cli: string): string {
-  const path = cli.replace(/\\/g, "/");
-  return `# Written by \`code-alarm install codex\`; removed by \`code-alarm uninstall codex\`.
+  // A JSON string is a valid Starlark string, whatever the path contains. The examples are token
+  // lists, so no shell quoting is involved; Codex checks them when it loads the file.
+  const path = JSON.stringify(slashes(cli));
+  return `# ${RULES_MARK}; removed by \`code-alarm uninstall codex\`.
 # Lets Codex run Code Alarm's own commands without asking: they only change its arming state
 # and send an alarm.
 prefix_rule(
-    pattern = ["node", "${path}", ["arm", "disarm", "nap", "status", "done", "needs-you", "failed"]],
+    pattern = ["node", ${path}, ["arm", "disarm", "nap", "status", "done", "needs-you", "failed"]],
     decision = "allow",
     justification = "Code Alarm's own commands: arming state and alarms only.",
-    match = ['node "${path}" done', 'node "${path}" arm --notify'],
-    not_match = ['node "${path}" install codex'],
+    match = [["node", ${path}, "done"], ["node", ${path}, "arm", "--notify"]],
+    not_match = [["node", ${path}, "install", "codex"]],
 )
 `;
 }
@@ -102,9 +113,33 @@ function readHooksFile(path: string): HooksFile {
   throw new Error(`${path} isn't valid JSON, so code-alarm won't touch it. Fix or move it, then run this again.`);
 }
 
+const isOurFile = (path: string, mark: string) => readFileSync(path, "utf8").includes(mark);
+
+/** Backs up a file that isn't ours before we write over it. */
+function setAside(path: string, mark: string, now: number, notes: string[]): void {
+  if (!existsSync(path) || isOurFile(path, mark)) return;
+  const backup = `${path}.code-alarm-backup-${now}`;
+  copyFileSync(path, backup);
+  notes.push(`Backed up ${path} to ${backup}`);
+}
+
+/** Deletes a file only if it's ours. */
+function removeOurs(path: string, mark: string, notes: string[]): void {
+  if (!existsSync(path)) return;
+  if (!isOurFile(path, mark)) {
+    notes.push(`Left ${path} alone: code-alarm didn't write it`);
+    return;
+  }
+  rmSync(path, { force: true });
+  notes.push(`Removed ${path}`);
+}
+
 export function installCodex(args: { alarmHome: string; userHome: string; bundle: string; now: number }): string[] {
   const paths = codexPaths(args.alarmHome, args.userHome);
   const notes: string[] = [];
+  if (UNSAFE_IN_QUOTES.test(paths.cli)) {
+    throw new Error(`${paths.cli} contains " $ or \`, which can't be quoted safely in a hook command. Set CODE_ALARM_HOME to another folder and run this again.`);
+  }
   const current = readHooksFile(paths.hooksFile);
 
   mkdirSync(dirname(paths.cli), { recursive: true });
@@ -119,10 +154,13 @@ export function installCodex(args: { alarmHome: string; userHome: string; bundle
   writeFileAtomic(paths.hooksFile, JSON.stringify(withCodeAlarm(current, paths.cli), null, 2) + "\n");
   notes.push(`Added hooks for ${CODEX_EVENTS.join(", ")} to ${paths.hooksFile}`);
 
+  setAside(paths.rulesFile, RULES_MARK, args.now, notes);
   writeFileAtomic(paths.rulesFile, codexRules(paths.cli));
   notes.push(`Allowed Code Alarm's own commands in ${paths.rulesFile}`);
 
-  writeFileAtomic(join(paths.skillDir, "SKILL.md"), skillMarkdown(`node "${paths.cli.replace(/\\/g, "/")}"`, "code-alarm"));
+  const skillFile = join(paths.skillDir, "SKILL.md");
+  setAside(skillFile, SKILL_MARK, args.now, notes);
+  writeFileAtomic(skillFile, skillMarkdown(`node "${slashes(paths.cli)}"`, "code-alarm"));
   notes.push(`Installed the skill in ${paths.skillDir}`);
   return notes;
 }
@@ -134,13 +172,12 @@ export function uninstallCodex(args: { alarmHome: string; userHome: string }): s
     writeFileAtomic(paths.hooksFile, JSON.stringify(withoutCodeAlarm(readHooksFile(paths.hooksFile)), null, 2) + "\n");
     notes.push(`Removed code-alarm's hooks from ${paths.hooksFile}`);
   }
-  if (existsSync(paths.rulesFile)) {
-    rmSync(paths.rulesFile, { force: true });
-    notes.push(`Removed ${paths.rulesFile}`);
-  }
-  if (existsSync(paths.skillDir)) {
-    rmSync(paths.skillDir, { recursive: true, force: true });
-    notes.push(`Removed the skill from ${paths.skillDir}`);
+  removeOurs(paths.rulesFile, RULES_MARK, notes);
+  removeOurs(join(paths.skillDir, "SKILL.md"), SKILL_MARK, notes);
+  try {
+    rmdirSync(paths.skillDir); // only when nothing else is left in it
+  } catch {
+    // Missing, or it holds someone else's files: leave it.
   }
   rmSync(paths.cli, { force: true });
   return notes;

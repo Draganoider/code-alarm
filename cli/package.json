@@ -24,7 +24,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "node build.mjs",
     "test": "tsc -p tsconfig.test.json && node --test \"build/test/**/*.test.js\"",
-    "check": "npm run typecheck && npm test && npm run build"
+    "check": "npm run typecheck && npm test && npm run build",
+    "prepack": "node -e \"for (const f of ['LICENSE', 'README.md']) require('node:fs').copyFileSync('../' + f, f)\""
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { CODEX_EVENTS, codexInstalled, codexPaths, installCodex, uninstallCodex } from "../src/install.js";
+import { CODEX_EVENTS, codexInstalled, codexPaths, codexRules, installCodex, uninstallCodex } from "../src/install.js";
 import { tempDir } from "./helpers.js";
 
 function fixture(existing?: unknown) {
@@ -61,6 +61,48 @@ test("uninstall removes only ours", () => {
   assert.ok(!existsSync(f.paths.skillDir));
   assert.ok(!existsSync(f.paths.rulesFile));
   assert.ok(!codexInstalled(f.alarmHome, f.userHome));
+});
+
+test("someone else's rules file or skill is backed up, and uninstall leaves their files alone", () => {
+  const f = fixture();
+  mkdirSync(join(f.userHome, ".codex", "rules"), { recursive: true });
+  writeFileSync(f.paths.rulesFile, "# my own rules\n");
+  mkdirSync(f.paths.skillDir, { recursive: true });
+  writeFileSync(join(f.paths.skillDir, "SKILL.md"), "my own skill\n");
+  writeFileSync(join(f.paths.skillDir, "notes.md"), "keep me\n");
+  installCodex({ alarmHome: f.alarmHome, userHome: f.userHome, bundle: f.bundle, now: 7 });
+  assert.equal(readFileSync(`${f.paths.rulesFile}.code-alarm-backup-7`, "utf8"), "# my own rules\n");
+  assert.equal(readFileSync(join(f.paths.skillDir, "SKILL.md.code-alarm-backup-7"), "utf8"), "my own skill\n");
+  // Installing again overwrites only our own files, with no new backups.
+  installCodex({ alarmHome: f.alarmHome, userHome: f.userHome, bundle: f.bundle, now: 8 });
+  assert.ok(!existsSync(`${f.paths.rulesFile}.code-alarm-backup-8`));
+  uninstallCodex({ alarmHome: f.alarmHome, userHome: f.userHome });
+  assert.ok(!existsSync(f.paths.rulesFile));
+  assert.ok(!existsSync(join(f.paths.skillDir, "SKILL.md")));
+  assert.equal(readFileSync(join(f.paths.skillDir, "notes.md"), "utf8"), "keep me\n");
+});
+
+test("uninstall leaves a rules file it didn't write", () => {
+  const f = fixture();
+  mkdirSync(join(f.userHome, ".codex", "rules"), { recursive: true });
+  writeFileSync(f.paths.rulesFile, "# my own rules\n");
+  uninstallCodex({ alarmHome: f.alarmHome, userHome: f.userHome });
+  assert.equal(readFileSync(f.paths.rulesFile, "utf8"), "# my own rules\n");
+});
+
+test("the rules file stays valid with quotes in the path", () => {
+  const rules = codexRules(`C:\\Users\\O'Connor "x"\\AppData\\Roaming\\code-alarm\\bin\\code-alarm.mjs`);
+  const path = JSON.stringify(`C:/Users/O'Connor "x"/AppData/Roaming/code-alarm/bin/code-alarm.mjs`);
+  assert.ok(rules.includes(`pattern = ["node", ${path}, [`));
+  assert.ok(rules.includes(`match = [["node", ${path}, "done"]`));
+  assert.ok(!rules.includes("['node"), "no single-quoted examples for a path to break");
+});
+
+test("install refuses a path that can't be quoted safely in a hook command", () => {
+  const f = fixture();
+  const alarmHome = join(f.root, "a$b");
+  assert.throws(() => installCodex({ alarmHome, userHome: f.userHome, bundle: f.bundle, now: 1 }), /can't be quoted safely/);
+  assert.ok(!existsSync(join(f.userHome, ".codex")), "nothing written");
 });
 
 test("install works with no hooks file yet", () => {

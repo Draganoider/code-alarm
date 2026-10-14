@@ -25,5 +25,5 @@ body:
     id: status
     attributes:
       label: Output of `code-alarm status`
-      description: It shows only the start of your topic. Check it before pasting.
+      description: It never shows your topic or token.
       render: text

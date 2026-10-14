@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -47,13 +48,22 @@ test("init, then arm, status and disarm", () => {
   assert.equal(run(["init", "--topic", "code-alarm-test-topic"], "", home).status, 0);
   assert.match(run(["arm", "--for", "2h"], "", home).stdout, /^Armed /);
   const status = run(["status"], "", home).stdout;
-  assert.match(status, /Transport: ntfy, https:\/\/ntfy\.sh, topic code-alarm-tes…/);
+  assert.match(status, /Transport: ntfy, https:\/\/ntfy\.sh, topic set/);
+  assert.doesNotMatch(status, /code-alarm-te/, "no part of the topic: people paste status into bug reports");
   assert.match(status, /Armed:/);
   assert.match(run(["disarm"], "", home).stdout, /Disarmed this folder/);
   assert.match(run(["arm", "--notify"], "", home).stdout, /one notification/);
   assert.match(run(["status"], "", home).stdout, /notification only/);
   run(["disarm"], "", home);
   assert.match(run(["status"], "", home).stdout, /Nothing is armed/);
+});
+
+test("init --force recovers from a broken config", () => {
+  const home = tempDir();
+  writeFileSync(join(home, "config.json"), "{ not json");
+  assert.notEqual(run(["status"], "", home).status, 0);
+  assert.equal(run(["init", "--force", "--topic", "code-alarm-fresh-topic"], "", home).status, 0);
+  assert.match(run(["status"], "", home).stdout, /topic set/);
 });
 
 test("bad durations are refused", () => {

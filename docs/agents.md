@@ -26,7 +26,9 @@ Docs: [hooks](https://code.claude.com/docs/en/hooks),
   - Arguments after `/code-alarm:alarm` reach the skill (`$ARGUMENTS`, or appended as
     `ARGUMENTS:`), which is how "quiet" selects a notification.
 - **Events we use:**
-  - `Stop`: every turn. The payload has `session_id`, `prompt_id` and `cwd`.
+  - `Stop`: every turn. The payload has `session_id`, `prompt_id` and `cwd`. The same
+    `session_id` reaches the tools as `CLAUDE_CODE_SESSION_ID` (it's the transcript's name;
+    checked in the desktop app, 14 Oct 2026), which is how `code-alarm done` knows its session.
   - `StopFailure`: the turn ended on an error.
   - `PermissionRequest`: a permission dialog is about to show. Its `tool_input.command` tells us
     when the waiting command is code-alarm's own. We use it instead of `Notification`
@@ -55,7 +57,9 @@ Docs: [hooks](https://learn.chatgpt.com/docs/hooks),
     for all three hooks.
 - **Events we use:**
   - `Stop`: the payload has `session_id`, `turn_id`, `cwd` and `last_assistant_message`. We ignore
-    that last one.
+    that last one. Commands get the session as `CODEX_THREAD_ID` (and `CODEX_SESSION_ID`, the
+    same value: the thread ID; codex-cli 0.162.0-alpha.17.2, 14 Oct 2026). Codex's session logs
+    record that thread ID as `session_id`; that hooks get the same value is assumed, not yet seen.
   - `PermissionRequest`: Codex is about to ask for approval. A hook that prints nothing leaves the
     normal prompt alone.
     - The owner's first test showed why it matters: the model's `code-alarm done` needed approval,

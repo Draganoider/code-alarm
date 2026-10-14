@@ -208,7 +208,7 @@ function formatDuration(ms) {
 
 // src/state.ts
 import { createHash as createHash2 } from "node:crypto";
-import { existsSync as existsSync2, mkdirSync as mkdirSync3, readdirSync, readFileSync as readFileSync3, rmSync } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readdirSync, readFileSync as readFileSync3, renameSync as renameSync2, rmSync } from "node:fs";
 import { isAbsolute, join as join3, relative, resolve } from "node:path";
 var NAP_KEY = "nap";
 function normalize(dir, platform = process.platform) {
@@ -225,14 +225,20 @@ function armProject(home, dir, until, now, level = "alarm") {
   const arming = { kind: "project", level, dir: resolve(dir), armedAt: now, until };
   const key = keyFor(dir);
   writeFileAtomic(join3(armedDir(home), `${key}.json`), JSON.stringify(arming));
-  clearSignaled(home, key);
+  startFresh(home, key);
   return { ...arming, key };
 }
 function armNap(home, until, now, level = "alarm") {
   const arming = { kind: "nap", level, armedAt: now, until };
   writeFileAtomic(join3(armedDir(home), `${NAP_KEY}.json`), JSON.stringify(arming));
-  clearSignaled(home, NAP_KEY);
+  startFresh(home, NAP_KEY);
   return { ...arming, key: NAP_KEY };
+}
+function startFresh(home, key) {
+  clearSignaled(home, key);
+  const dir = join3(home, "sent");
+  if (!existsSync2(dir)) return;
+  for (const file of readdirSync(dir)) if (file.startsWith(`${key}-`)) rmSync(join3(dir, file), { force: true });
 }
 function listArmings(home, now) {
   const dir = armedDir(home);
@@ -267,8 +273,17 @@ function findArming(home, cwd, now) {
   }
   return best ?? armings.find((arming) => arming.kind === "nap") ?? null;
 }
-function consume(home, arming) {
-  if (arming.kind === "project") rmSync(join3(armedDir(home), `${arming.key}.json`), { force: true });
+function claim(home, arming) {
+  if (arming.kind !== "project") return true;
+  const path = join3(armedDir(home), `${arming.key}.json`);
+  const claimed = `${path}.${process.pid}.${Date.now()}.claimed`;
+  try {
+    renameSync2(path, claimed);
+  } catch {
+    return false;
+  }
+  rmSync(claimed, { force: true });
+  return true;
 }
 function disarmProject(home, dir) {
   const path = join3(armedDir(home), `${keyFor(dir)}.json`);
@@ -282,6 +297,9 @@ function disarmAll(home) {
   const files = readdirSync(dir).filter((file) => file.endsWith(".json"));
   for (const file of files) rmSync(join3(dir, file), { force: true });
   return files.length;
+}
+function signalKey(armingKey, sessionId) {
+  return sessionId ? `session-${createHash2("sha256").update(sessionId).digest("hex").slice(0, 16)}` : armingKey;
 }
 function markSignaled(home, key, now, kind) {
   writeFileAtomic(signalFile(home, key), JSON.stringify({ at: now, kind }));
@@ -333,11 +351,81 @@ function parseHookInput(raw) {
     return null;
   }
 }
-var SUBCOMMANDS = "arm|disarm|nap|status|test|init|install|uninstall|done|needs-you|failed|help|version";
+var SUBCOMMANDS = /* @__PURE__ */ new Set(["arm", "disarm", "nap", "status", "test", "init", "install", "uninstall", "done", "needs-you", "failed", "help", "version"]);
+var SHELL = /^(?:pwsh|powershell|bash|sh|zsh|cmd)(?:\.exe)?$/;
+var SCRIPT_FLAG = /^[-/](?:c|lc|command)$/i;
+var HARMLESS = /^(?:cd|pushd|set-location|sl)$/;
+var basename = (word) => (word.split(/[\\/]/).pop() ?? "").toLowerCase();
+function simpleCommands(line) {
+  const commands = [];
+  let words = [];
+  let word = "";
+  let inWord = false;
+  let quote = null;
+  const endWord = () => {
+    if (inWord && !/^\d*[<>]/.test(word)) words.push(word);
+    word = "";
+    inWord = false;
+  };
+  const endCommand = () => {
+    endWord();
+    if (words.length > 0) commands.push(words);
+    words = [];
+  };
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === quote) quote = null;
+      else if (c === "\\" && quote === '"' && (line[i + 1] === '"' || line[i + 1] === "\\")) word += line[++i];
+      else word += c;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      inWord = true;
+    } else if (c === "&" && word.endsWith(">")) {
+      word += c;
+    } else if (";&|\n\r()".includes(c)) {
+      endCommand();
+    } else if (/\s/.test(c)) {
+      endWord();
+    } else {
+      word += c;
+      inWord = true;
+    }
+  }
+  endCommand();
+  return commands;
+}
+function ownInWords(words, depth) {
+  const first = basename(words[0]);
+  if (SHELL.test(first)) {
+    const flag = words.findIndex((word, i2) => i2 > 0 && SCRIPT_FLAG.test(word));
+    const script = words.slice(flag + 1).map((word) => /\s/.test(word) && words.length - flag > 2 ? `"${word}"` : word);
+    return flag > 0 && script.length > 0 ? ownInLine(script.join(" "), depth + 1) : null;
+  }
+  if (HARMLESS.test(first)) return "";
+  let i = 0;
+  if (/^npx(?:\.cmd)?$/.test(first)) {
+    i++;
+    while (words[i]?.startsWith("-")) i++;
+  } else if (/^node(?:\.exe)?$/.test(first)) {
+    i++;
+  }
+  if (!words[i] || !/^code-alarm(?:\.mjs|\.cmd|\.ps1)?$/.test(basename(words[i]))) return null;
+  const sub = words[i + 1];
+  return sub && SUBCOMMANDS.has(sub) ? sub : null;
+}
+function ownInLine(line, depth) {
+  if (depth > 3) return null;
+  let own = null;
+  for (const words of simpleCommands(line)) {
+    const found = ownInWords(words, depth);
+    if (found === null) return null;
+    if (found && own === null) own = found;
+  }
+  return own;
+}
 function ownSubcommand(command) {
-  if (!command) return null;
-  const match = new RegExp(`(?:^|[\\s"'\\\\/;&|])code-alarm(?:\\.mjs|\\.cmd)?["']?\\s+(${SUBCOMMANDS})(?=$|\\s)`).exec(command);
-  return match ? match[1] : null;
+  return command ? ownInLine(command, 0) : null;
 }
 function actionFor(_agent, input) {
   switch (input.event) {
@@ -368,22 +456,30 @@ async function runHook(agent, raw, deps) {
     if (action.type === "none") return "";
     const cwd = input.cwd ?? deps.cwd();
     if (action.type === "signal") {
-      const result = await sendSignal(action.kind, agentOf(agent), cwd, deps);
+      const result = await sendSignal(action.kind, agentOf(agent), cwd, deps, input.sessionId);
       return result.sent ? `hook ${agent} ${input.event}: ${action.kind} signal sent while awaiting approval` : "";
     }
     const now = deps.now();
-    const arming = findArming(deps.home, cwd, now);
-    if (!arming) return "";
     if (action.type === "clear-signal") {
-      clearSignaled(deps.home, arming.key);
+      if (input.sessionId) clearSignaled(deps.home, signalKey("", input.sessionId));
+      const arming2 = findArming(deps.home, cwd, now);
+      if (arming2) clearSignaled(deps.home, arming2.key);
       return "";
     }
-    if (action.fallback && isSignaled(deps.home, arming.key)) {
-      clearSignaled(deps.home, arming.key);
-      return `hook ${agent} ${input.event}: skipped, the agent already signalled this turn`;
+    const arming = findArming(deps.home, cwd, now);
+    if (!arming) return "";
+    if (action.fallback) {
+      const keys = [signalKey(arming.key, input.sessionId), arming.key];
+      if (keys.some((key) => isSignaled(deps.home, key))) {
+        for (const key of keys) clearSignaled(deps.home, key);
+        return `hook ${agent} ${input.event}: skipped, the agent already signalled this turn`;
+      }
     }
     if (action.rateLimitMs && rateLimited(deps.home, arming.key, action.kind, now, action.rateLimitMs)) {
       return `hook ${agent} ${input.event}: skipped, ${action.kind} sent less than ${action.rateLimitMs / 1e3}s ago`;
+    }
+    if (action.consume && !claim(deps.home, arming)) {
+      return `hook ${agent} ${input.event}: skipped, another alert already ended this arming`;
     }
     const event = buildEvent({
       kind: action.kind,
@@ -394,30 +490,36 @@ async function runHook(agent, raw, deps) {
       idParts: [agent, input.sessionId, input.turnId ?? input.promptId, action.kind]
     });
     await deps.send(event);
-    if (action.consume) consume(deps.home, arming);
     return `hook ${agent} ${input.event}: ${action.kind} queued`;
   } catch (e) {
     return `hook ${agent}: error ${e instanceof Error ? e.message : String(e)}`;
   }
 }
-async function sendSignal(kind, agent, cwd, deps) {
+async function sendSignal(kind, agent, cwd, deps, sessionId) {
   const now = deps.now();
   const arming = findArming(deps.home, cwd, now);
   if (!arming) return { sent: false, message: "Not armed here, so nothing was sent." };
-  if (signaledKind(deps.home, arming.key) === kind) return { sent: false, message: "That alert was already sent." };
+  const key = signalKey(arming.key, sessionId);
+  const already = { sent: false, message: "That alert was already sent." };
+  if (signaledKind(deps.home, key) === kind) return already;
+  if (kind !== "needs_input" && !claim(deps.home, arming)) return already;
+  markSignaled(deps.home, key, now, kind);
   const event = buildEvent({ kind, level: arming.level ?? "alarm", label: labelFor(arming.dir ?? cwd), agent, now });
   await deps.send(event);
-  markSignaled(deps.home, arming.key, now, kind);
-  if (kind !== "needs_input") consume(deps.home, arming);
   const what = kind === "needs_input" ? "needs you" : kind;
   return { sent: true, message: `${arming.level === "notify" ? "Notification" : "Alarm"} sent: ${what} (${event.label}).` };
 }
-async function runSignal(kind, agent, deps) {
-  return sendSignal(kind, agent, deps.cwd(), deps);
+async function runSignal(kind, agent, deps, sessionId) {
+  return sendSignal(kind, agent, deps.cwd(), deps, sessionId);
+}
+function sessionFromEnv(agent, env) {
+  if (agent === "claude-code") return env.CLAUDE_CODE_SESSION_ID || void 0;
+  if (agent === "codex") return env.CODEX_THREAD_ID || env.CODEX_SESSION_ID || void 0;
+  return void 0;
 }
 
 // src/install.ts
-import { copyFileSync, existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync4, rmSync as rmSync2 } from "node:fs";
+import { copyFileSync, existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync4, rmdirSync, rmSync as rmSync2 } from "node:fs";
 import { dirname as dirname2, join as join4 } from "node:path";
 
 // src/skill.ts
@@ -465,20 +567,24 @@ function codexPaths(alarmHome2, userHome) {
   };
 }
 var CODEX_EVENTS = ["Stop", "PermissionRequest", "UserPromptSubmit"];
+var slashes = (path) => path.replace(/\\/g, "/");
 function codexCommand(cli) {
-  return `node "${cli.replace(/\\/g, "/")}" hook codex`;
+  return `node "${slashes(cli)}" hook codex`;
 }
+var UNSAFE_IN_QUOTES = /["$`]/;
+var RULES_MARK = "Written by `code-alarm install codex`";
+var SKILL_MARK = "# Code Alarm\n";
 function codexRules(cli) {
-  const path = cli.replace(/\\/g, "/");
-  return `# Written by \`code-alarm install codex\`; removed by \`code-alarm uninstall codex\`.
+  const path = JSON.stringify(slashes(cli));
+  return `# ${RULES_MARK}; removed by \`code-alarm uninstall codex\`.
 # Lets Codex run Code Alarm's own commands without asking: they only change its arming state
 # and send an alarm.
 prefix_rule(
-    pattern = ["node", "${path}", ["arm", "disarm", "nap", "status", "done", "needs-you", "failed"]],
+    pattern = ["node", ${path}, ["arm", "disarm", "nap", "status", "done", "needs-you", "failed"]],
     decision = "allow",
     justification = "Code Alarm's own commands: arming state and alarms only.",
-    match = ['node "${path}" done', 'node "${path}" arm --notify'],
-    not_match = ['node "${path}" install codex'],
+    match = [["node", ${path}, "done"], ["node", ${path}, "arm", "--notify"]],
+    not_match = [["node", ${path}, "install", "codex"]],
 )
 `;
 }
@@ -510,9 +616,28 @@ function readHooksFile(path) {
   }
   throw new Error(`${path} isn't valid JSON, so code-alarm won't touch it. Fix or move it, then run this again.`);
 }
+var isOurFile = (path, mark) => readFileSync4(path, "utf8").includes(mark);
+function setAside(path, mark, now, notes) {
+  if (!existsSync3(path) || isOurFile(path, mark)) return;
+  const backup = `${path}.code-alarm-backup-${now}`;
+  copyFileSync(path, backup);
+  notes.push(`Backed up ${path} to ${backup}`);
+}
+function removeOurs(path, mark, notes) {
+  if (!existsSync3(path)) return;
+  if (!isOurFile(path, mark)) {
+    notes.push(`Left ${path} alone: code-alarm didn't write it`);
+    return;
+  }
+  rmSync2(path, { force: true });
+  notes.push(`Removed ${path}`);
+}
 function installCodex(args) {
   const paths = codexPaths(args.alarmHome, args.userHome);
   const notes = [];
+  if (UNSAFE_IN_QUOTES.test(paths.cli)) {
+    throw new Error(`${paths.cli} contains " $ or \`, which can't be quoted safely in a hook command. Set CODE_ALARM_HOME to another folder and run this again.`);
+  }
   const current = readHooksFile(paths.hooksFile);
   mkdirSync4(dirname2(paths.cli), { recursive: true });
   copyFileSync(args.bundle, paths.cli);
@@ -524,9 +649,12 @@ function installCodex(args) {
   }
   writeFileAtomic(paths.hooksFile, JSON.stringify(withCodeAlarm(current, paths.cli), null, 2) + "\n");
   notes.push(`Added hooks for ${CODEX_EVENTS.join(", ")} to ${paths.hooksFile}`);
+  setAside(paths.rulesFile, RULES_MARK, args.now, notes);
   writeFileAtomic(paths.rulesFile, codexRules(paths.cli));
   notes.push(`Allowed Code Alarm's own commands in ${paths.rulesFile}`);
-  writeFileAtomic(join4(paths.skillDir, "SKILL.md"), skillMarkdown(`node "${paths.cli.replace(/\\/g, "/")}"`, "code-alarm"));
+  const skillFile = join4(paths.skillDir, "SKILL.md");
+  setAside(skillFile, SKILL_MARK, args.now, notes);
+  writeFileAtomic(skillFile, skillMarkdown(`node "${slashes(paths.cli)}"`, "code-alarm"));
   notes.push(`Installed the skill in ${paths.skillDir}`);
   return notes;
 }
@@ -537,13 +665,11 @@ function uninstallCodex(args) {
     writeFileAtomic(paths.hooksFile, JSON.stringify(withoutCodeAlarm(readHooksFile(paths.hooksFile)), null, 2) + "\n");
     notes.push(`Removed code-alarm's hooks from ${paths.hooksFile}`);
   }
-  if (existsSync3(paths.rulesFile)) {
-    rmSync2(paths.rulesFile, { force: true });
-    notes.push(`Removed ${paths.rulesFile}`);
-  }
-  if (existsSync3(paths.skillDir)) {
-    rmSync2(paths.skillDir, { recursive: true, force: true });
-    notes.push(`Removed the skill from ${paths.skillDir}`);
+  removeOurs(paths.rulesFile, RULES_MARK, notes);
+  removeOurs(join4(paths.skillDir, "SKILL.md"), SKILL_MARK, notes);
+  try {
+    rmdirSync(paths.skillDir);
+  } catch {
   }
   rmSync2(paths.cli, { force: true });
   return notes;
@@ -600,7 +726,10 @@ async function readStdin(timeoutMs = 3e3) {
   if (process.stdin.isTTY) return "";
   return new Promise((done) => {
     let data = "";
-    const timer = setTimeout(() => done(data), timeoutMs);
+    const timer = setTimeout(() => {
+      process.stdin.destroy();
+      done(data);
+    }, timeoutMs);
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (chunk) => data += chunk);
     process.stdin.on("end", () => {
@@ -647,8 +776,8 @@ async function main(argv) {
         args: rest,
         options: { server: { type: "string" }, topic: { type: "string" }, token: { type: "string" }, force: { type: "boolean" } }
       });
-      const existing = loadConfig(home);
-      if (existing && !values.force) {
+      const existing = values.force ? null : loadConfig(home);
+      if (existing) {
         console.log(`Already set up: ntfy topic ${existing.ntfy.topic} on ${existing.ntfy.server}.`);
         console.log("Run `code-alarm init --force` to start over with a new topic.");
         return 0;
@@ -732,7 +861,10 @@ Then connect your agent:
     case "status": {
       const config = loadConfig(home);
       console.log(
-        config ? `Transport: ntfy, ${config.ntfy.server}, topic ${config.ntfy.topic.slice(0, 14)}\u2026${config.ntfy.token ? " (with token)" : ""}` : "Not set up: run `code-alarm init`."
+        config ? (
+          // Never any part of the topic: people paste this output into bug reports.
+          `Transport: ntfy, ${config.ntfy.server}, topic set${config.ntfy.token ? ", with a token" : ""}`
+        ) : "Not set up: run `code-alarm init`."
       );
       const now = Date.now();
       const armings = listArmings(home, now);
@@ -752,7 +884,8 @@ ${log.map((line) => `  ${line}`).join("\n")}`);
     case "needs-you":
     case "failed": {
       const kind = command === "needs-you" ? "needs_input" : command;
-      const result = await runSignal(kind, detectAgent(process.env), deps);
+      const agent = detectAgent(process.env);
+      const result = await runSignal(kind, agent, deps, sessionFromEnv(agent, process.env));
       console.log(result.message);
       return 0;
     }

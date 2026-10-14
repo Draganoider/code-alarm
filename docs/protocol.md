@@ -52,14 +52,19 @@ The alarm skill runs `code-alarm arm` for you.
 
 `Stop` fires after every turn, including when the agent stops to ask you something. That's why
 it's only the fallback: if the agent ran `done`, `needs-you` or `failed` during the turn, the
-`Stop` that follows sends nothing. The same signal twice in a turn is sent once.
+`Stop` that follows sends nothing. The same signal twice in a turn is sent once. "This turn" belongs
+to one agent session (the agents give their tools the session ID), so one session's signal never
+silences another's `Stop`. A project arming is claimed before its end-of-task alert is sent, so two
+hooks racing for it send one alert.
 
 The installers pre-approve code-alarm's own commands, so an agent normally never has to ask:
 - Claude Code: the skill's `allowed-tools`.
 - Codex: `~/.codex/rules/code-alarm.rules`.
 
 When one still asks to run `code-alarm done`, that request counts as the signal. You get the
-right alert even when nobody is there to approve.
+right alert even when nobody is there to approve. Only a command that runs code-alarm itself counts
+(optionally after `cd`, or inside a shell wrapper such as `pwsh -Command`): text that merely
+mentions it, like a commit message, is an ordinary approval.
 
 ## Transports
 
