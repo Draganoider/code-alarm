@@ -765,8 +765,9 @@ ${log.map((line) => `  ${line}`).join("\n")}`);
         for (const note of installCodex({ alarmHome: home, userHome: homedir2(), bundle: resolve2(script), now: Date.now() })) console.log(note);
         console.log(
           `
-Next: restart Codex (it reads rules at startup) and approve (trust) the new hooks when it asks.
-Codex skips hooks until you do.
+Next: quit Codex completely and start it again. It reads rules only at startup, and closing
+its window may leave it running in the background. Then approve (trust) the new hooks when it
+asks; Codex skips hooks until you do.
 Then, before a long task, ask Codex to use the code-alarm skill (or say "wake me when it's done").`
         );
       } else {

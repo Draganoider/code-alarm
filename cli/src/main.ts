@@ -234,8 +234,9 @@ Then connect your agent:
         if (!script) throw new ConfigError("Can't tell where this code-alarm script is.");
         for (const note of installCodex({ alarmHome: home, userHome: homedir(), bundle: resolve(script), now: Date.now() })) console.log(note);
         console.log(
-          "\nNext: restart Codex (it reads rules at startup) and approve (trust) the new hooks when it asks.\n" +
-            "Codex skips hooks until you do.\n" +
+          "\nNext: quit Codex completely and start it again. It reads rules only at startup, and closing\n" +
+            "its window may leave it running in the background. Then approve (trust) the new hooks when it\n" +
+            "asks; Codex skips hooks until you do.\n" +
             "Then, before a long task, ask Codex to use the code-alarm skill (or say \"wake me when it's done\").",
         );
       } else {

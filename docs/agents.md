@@ -61,6 +61,11 @@ Docs: [hooks](https://learn.chatgpt.com/docs/hooks),
     - The owner's first test showed why it matters: the model's `code-alarm done` needed approval,
       because it writes outside the sandbox, and the hook rang "needs you" two seconds before "done".
     - Fixed with a rules file and by recognising our own commands.
+    - **It also fires when Codex's auto-review handles the request** (the desktop app's setting;
+      the thread shows `approvals_reviewer: "auto_review"`): a "guardian" model approves or declines it, often
+      in a second or two, and the user isn't asked. Seen in the owner's logs, 14 Oct 2026: the hook
+      fired 0.2 s before the guardian allowed `done`. The payload doesn't say which reviewer will
+      answer, so an auto-reviewed escalation looks like one waiting for the user.
   - `UserPromptSubmit`.
   - There's no `Notification` event.
 - **Plugins:**
@@ -75,10 +80,15 @@ Docs: [hooks](https://learn.chatgpt.com/docs/hooks),
   the sandbox without asking; the strictest matching rule wins. Experimental.
   `code-alarm install codex` writes `code-alarm.rules`, allowing only `arm`, `disarm`, `nap`,
   `status`, `done`, `needs-you` and `failed`.
-  - **Unconfirmed:** in the owner's first test after installing it (Windows desktop app, 14 Oct
-    2026), Codex still asked approval for `done`. It may not have been fully restarted, or a shell
-    wrapper may keep the rule from matching.
-  - The `PermissionRequest` fallback sent the right `done` anyway, so the alarm doesn't depend on
+  - **Windows wraps every command in PowerShell** (`powershell.exe -Command "<script>"` from the
+    CLI, the bundled `pwsh.exe -Command` in the desktop app). Codex unwraps a simple script before
+    matching, so the rule's `["node", <cli>, …]` prefix matches; a rule written against the
+    PowerShell wrapper never does. Verified with `codex exec`, codex-cli 0.162.0-alpha.17.2, 14 Oct
+    2026. `codex execpolicy check` doesn't unwrap anything, so test the bare command with it.
+  - **Rules load when Codex starts.** The owner's first test "after installing" ran in Codex
+    processes started 26 minutes before the rules file existed, so the rule wasn't loaded and
+    auto-review handled `done`. Closing the window may leave Codex running; quit it completely.
+  - The `PermissionRequest` fallback sends the right `done` anyway, so the alarm doesn't depend on
     the rule.
 - **Skills:** repositories use `.agents/skills`. For personal skills, both `~/.agents/skills` and
   `~/.codex/skills` are in use on the owner's machine. We install to `~/.agents/skills/code-alarm`.
