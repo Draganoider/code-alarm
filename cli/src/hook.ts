@@ -1,5 +1,6 @@
+import { resolve } from "node:path";
 import { type Agent, type AlarmEvent, type Kind, buildEvent, labelFor } from "./events.js";
-import { claim, clearSignaled, findArming, isSignaled, markSignaled, rateLimited, signalKey, signaledKind } from "./state.js";
+import { claim, claimEvent, clearSignaled, findArming, isSignaled, markSignaled, rateLimited, signalKey, signaledKind } from "./state.js";
 
 /**
  * The fields we read from an agent's hook payload. Everything else in it (prompts, transcripts,
@@ -20,7 +21,7 @@ export type SignalKind = "done" | "needs_input" | "failed";
 
 export type Action =
   | { type: "send"; kind: Kind; fallback: boolean; consume: boolean; rateLimitMs?: number }
-  | { type: "signal"; kind: SignalKind }
+  | { type: "signal"; kind: SignalKind; cwd: string }
   | { type: "clear-signal" }
   | { type: "none" };
 
@@ -58,9 +59,17 @@ export function parseHookInput(raw: string): HookInput | null {
 const SUBCOMMANDS = new Set(["arm", "disarm", "nap", "status", "test", "init", "install", "uninstall", "done", "needs-you", "failed", "help", "version"]);
 const SHELL = /^(?:pwsh|powershell|bash|sh|zsh|cmd)(?:\.exe)?$/;
 const SCRIPT_FLAG = /^[-/](?:c|lc|command)$/i;
-const HARMLESS = /^(?:cd|pushd|set-location|sl)$/;
+const CHANGE_DIR = /^(?:cd|chdir|pushd|set-location|sl)$/;
+/** Code run inside an argument (`$(…)`, backticks, `<(…)`), which this parser can't follow. */
+const EXPANSION = /\$\(|`|[<>]\(/;
 
 const basename = (word: string) => (word.split(/[\\/]/).pop() ?? "").toLowerCase();
+
+/** A command line that runs code-alarm itself: the subcommand, and the folder it runs in. */
+export interface OwnCommand {
+  sub: string;
+  cwd: string;
+}
 
 /**
  * Splits a command line into simple commands (on `;`, `&`, `|`, newlines and brackets outside
@@ -107,16 +116,9 @@ function simpleCommands(line: string): string[][] {
   return commands;
 }
 
-/** The subcommand if `words` runs code-alarm; "" for a harmless command like cd; null for anything else. */
-function ownInWords(words: string[], depth: number): string | null {
+/** `code-alarm <sub>`, `node <path>/code-alarm.mjs <sub>` or `npx code-alarm <sub>`; otherwise null. */
+function ownInWords(words: string[], cwd: string): OwnCommand | null {
   const first = basename(words[0]!);
-  if (SHELL.test(first)) {
-    // A shell wrapper, such as Codex's `pwsh -Command "<script>"` on Windows: look at the script.
-    const flag = words.findIndex((word, i) => i > 0 && SCRIPT_FLAG.test(word));
-    const script = words.slice(flag + 1).map((word) => (/\s/.test(word) && words.length - flag > 2 ? `"${word}"` : word));
-    return flag > 0 && script.length > 0 ? ownInLine(script.join(" "), depth + 1) : null;
-  }
-  if (HARMLESS.test(first)) return "";
   let i = 0;
   if (/^npx(?:\.cmd)?$/.test(first)) {
     i++;
@@ -126,31 +128,49 @@ function ownInWords(words: string[], depth: number): string | null {
   }
   if (!words[i] || !/^code-alarm(?:\.mjs|\.cmd|\.ps1)?$/.test(basename(words[i]!))) return null;
   const sub = words[i + 1];
-  return sub && SUBCOMMANDS.has(sub) ? sub : null;
+  return sub && SUBCOMMANDS.has(sub) ? { sub, cwd } : null;
 }
 
-function ownInLine(line: string, depth: number): string | null {
-  if (depth > 3) return null;
-  let own: string | null = null;
+function ownInLine(line: string, cwd: string, depth: number): OwnCommand | null {
+  if (depth > 3 || EXPANSION.test(line)) return null;
+  let own: OwnCommand | null = null;
+  let dir = cwd;
   for (const words of simpleCommands(line)) {
-    const found = ownInWords(words, depth);
-    if (found === null) return null; // something else runs too, so the approval is about more than us
-    if (found && own === null) own = found;
+    const first = basename(words[0]!);
+    if (CHANGE_DIR.test(first)) {
+      // Follow a plain `cd <folder>`, so a signal is for the folder it runs in.
+      const args = words.slice(1).filter((word) => !/^-(?:path|literalpath)$/i.test(word));
+      if (args.length !== 1 || /[$%~*?]/.test(args[0]!) || args[0] === "-") return null;
+      dir = resolve(dir, args[0]!);
+      continue;
+    }
+    let found: OwnCommand | null;
+    if (SHELL.test(first)) {
+      // A shell wrapper, such as Codex's `pwsh -Command "<script>"` on Windows: look at the script.
+      const flag = words.findIndex((word, i) => i > 0 && SCRIPT_FLAG.test(word));
+      const script = flag > 0 ? words.slice(flag + 1) : [];
+      const inner = script.length === 1 ? script[0]! : script.map((word) => (/\s/.test(word) ? `"${word}"` : word)).join(" ");
+      found = script.length > 0 ? ownInLine(inner, dir, depth + 1) : null;
+    } else {
+      found = ownInWords(words, dir);
+    }
+    if (!found) return null; // something else runs too, so the approval is about more than us
+    own ??= found;
   }
   return own;
 }
 
 /**
- * If `command` only runs code-alarm itself (plus harmless steps like `cd`), its subcommand ("done",
- * "arm"...); otherwise null. Text that merely mentions code-alarm, like `echo code-alarm done` or a
- * commit message, isn't ours.
+ * If `command` only runs code-alarm itself (after plain `cd`s, or inside a shell wrapper), its
+ * subcommand and the folder it runs in; otherwise null. Text that merely mentions code-alarm, like
+ * `echo code-alarm done` or a commit message, isn't ours, and neither is anything this can't follow.
  */
-export function ownSubcommand(command: string | undefined): string | null {
-  return command ? ownInLine(command, 0) : null;
+export function ownCommand(command: string | undefined, cwd: string): OwnCommand | null {
+  return command ? ownInLine(command, resolve(cwd), 0) : null;
 }
 
 /** Which alert, if any, an agent event means (docs/protocol.md, "When an event is sent"). */
-export function actionFor(_agent: HookAgent, input: HookInput): Action {
+export function actionFor(_agent: HookAgent, input: HookInput, cwd: string): Action {
   switch (input.event) {
     case "Stop":
       // Fires after every turn. Only a fallback: an explicit signal this turn takes precedence.
@@ -159,10 +179,10 @@ export function actionFor(_agent: HookAgent, input: HookInput): Action {
       return { type: "send", kind: "failed", fallback: false, consume: true };
     case "PermissionRequest": {
       // Observe only: the hook prints nothing, so the normal approval prompt still appears.
-      const own = ownSubcommand(input.command);
-      if (own === "done") return { type: "signal", kind: "done" };
-      if (own === "needs-you") return { type: "signal", kind: "needs_input" };
-      if (own === "failed") return { type: "signal", kind: "failed" };
+      const own = ownCommand(input.command, cwd);
+      if (own?.sub === "done") return { type: "signal", kind: "done", cwd: own.cwd };
+      if (own?.sub === "needs-you") return { type: "signal", kind: "needs_input", cwd: own.cwd };
+      if (own?.sub === "failed") return { type: "signal", kind: "failed", cwd: own.cwd };
       // Approving our own arm, status and the like isn't "the agent needs you".
       if (own) return { type: "none" };
       return { type: "send", kind: "needs_input", fallback: false, consume: false, rateLimitMs: NEEDS_INPUT_WINDOW_MS };
@@ -184,12 +204,12 @@ export async function runHook(agent: HookAgent, raw: string, deps: Deps): Promis
   try {
     const input = parseHookInput(raw);
     if (!input) return "";
-    const action = actionFor(agent, input);
-    if (action.type === "none") return "";
     const cwd = input.cwd ?? deps.cwd();
+    const action = actionFor(agent, input, cwd);
+    if (action.type === "none") return "";
     if (action.type === "signal") {
       // The agent is waiting for approval to run `code-alarm <signal>`: that wait is the signal.
-      const result = await sendSignal(action.kind, agentOf(agent), cwd, deps, input.sessionId);
+      const result = await sendSignal(action.kind, agentOf(agent), action.cwd, deps, input.sessionId);
       return result.sent ? `hook ${agent} ${input.event}: ${action.kind} signal sent while awaiting approval` : "";
     }
     const now = deps.now();
@@ -202,6 +222,19 @@ export async function runHook(agent: HookAgent, raw: string, deps: Deps): Promis
     }
     const arming = findArming(deps.home, cwd, now);
     if (!arming) return ""; // Not armed: send nothing.
+    const event = buildEvent({
+      kind: action.kind,
+      level: arming.level ?? "alarm",
+      label: labelFor(arming.dir ?? cwd),
+      agent: agentOf(agent),
+      now,
+      idParts: [agent, input.sessionId, input.turnId ?? input.promptId, action.kind],
+    });
+    // End-of-turn hooks can fire twice for one turn (another plugin's Stop hook can make the agent
+    // go on). Both get the same event ID, so only the first one counts.
+    if (action.consume && !claimEvent(deps.home, event.id, now)) {
+      return `hook ${agent} ${input.event}: skipped, already handled for this turn`;
+    }
     if (action.fallback) {
       // The session's own signal, or one sent without a session ID (e.g. from a terminal).
       const keys = [signalKey(arming.key, input.sessionId), arming.key];
@@ -216,14 +249,6 @@ export async function runHook(agent: HookAgent, raw: string, deps: Deps): Promis
     if (action.consume && !claim(deps.home, arming)) {
       return `hook ${agent} ${input.event}: skipped, another alert already ended this arming`;
     }
-    const event = buildEvent({
-      kind: action.kind,
-      level: arming.level ?? "alarm",
-      label: labelFor(arming.dir ?? cwd),
-      agent: agentOf(agent),
-      now,
-      idParts: [agent, input.sessionId, input.turnId ?? input.promptId, action.kind],
-    });
     await deps.send(event);
     return `hook ${agent} ${input.event}: ${action.kind} queued`;
   } catch (e) {
@@ -244,8 +269,14 @@ async function sendSignal(
   const key = signalKey(arming.key, sessionId);
   const already = { sent: false, message: "That alert was already sent." };
   if (signaledKind(deps.home, key) === kind) return already;
+  // Recorded before the claim, so this session's Stop can't slip a "stopped" in meanwhile. If it
+  // can't be recorded, send anyway: a duplicate is better than a lost alert.
+  try {
+    markSignaled(deps.home, key, now, kind);
+  } catch {
+    // Carry on.
+  }
   if (kind !== "needs_input" && !claim(deps.home, arming)) return already;
-  markSignaled(deps.home, key, now, kind);
   const event = buildEvent({ kind, level: arming.level ?? "alarm", label: labelFor(arming.dir ?? cwd), agent, now });
   await deps.send(event);
   const what = kind === "needs_input" ? "needs you" : kind;

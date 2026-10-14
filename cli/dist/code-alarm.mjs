@@ -3,7 +3,7 @@
 
 // src/main.ts
 import { homedir as homedir2 } from "node:os";
-import { resolve as resolve2 } from "node:path";
+import { resolve as resolve3 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/config.ts
@@ -206,9 +206,12 @@ function formatDuration(ms) {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
+// src/hook.ts
+import { resolve as resolve2 } from "node:path";
+
 // src/state.ts
 import { createHash as createHash2 } from "node:crypto";
-import { existsSync as existsSync2, mkdirSync as mkdirSync3, readdirSync, readFileSync as readFileSync3, renameSync as renameSync2, rmSync } from "node:fs";
+import { closeSync, existsSync as existsSync2, mkdirSync as mkdirSync3, openSync, readdirSync, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, statSync as statSync2 } from "node:fs";
 import { isAbsolute, join as join3, relative, resolve } from "node:path";
 var NAP_KEY = "nap";
 function normalize(dir, platform = process.platform) {
@@ -282,8 +285,31 @@ function claim(home, arming) {
   } catch {
     return false;
   }
+  try {
+    const taken = JSON.parse(readFileSync3(claimed, "utf8"));
+    if (taken.armedAt !== arming.armedAt || taken.until !== arming.until) {
+      if (existsSync2(path)) rmSync(claimed, { force: true });
+      else renameSync2(claimed, path);
+      return false;
+    }
+  } catch {
+  }
   rmSync(claimed, { force: true });
   return true;
+}
+function claimEvent(home, id, now) {
+  const dir = join3(home, "events");
+  try {
+    mkdirSync3(dir, { recursive: true });
+    for (const file of readdirSync(dir)) {
+      const path = join3(dir, file);
+      if (now - statSync2(path).mtimeMs > 24 * 60 * 6e4) rmSync(path, { force: true });
+    }
+    closeSync(openSync(join3(dir, id), "wx"));
+    return true;
+  } catch (e) {
+    return e.code !== "EEXIST";
+  }
 }
 function disarmProject(home, dir) {
   const path = join3(armedDir(home), `${keyFor(dir)}.json`);
@@ -354,7 +380,8 @@ function parseHookInput(raw) {
 var SUBCOMMANDS = /* @__PURE__ */ new Set(["arm", "disarm", "nap", "status", "test", "init", "install", "uninstall", "done", "needs-you", "failed", "help", "version"]);
 var SHELL = /^(?:pwsh|powershell|bash|sh|zsh|cmd)(?:\.exe)?$/;
 var SCRIPT_FLAG = /^[-/](?:c|lc|command)$/i;
-var HARMLESS = /^(?:cd|pushd|set-location|sl)$/;
+var CHANGE_DIR = /^(?:cd|chdir|pushd|set-location|sl)$/;
+var EXPANSION = /\$\(|`|[<>]\(/;
 var basename = (word) => (word.split(/[\\/]/).pop() ?? "").toLowerCase();
 function simpleCommands(line) {
   const commands = [];
@@ -395,14 +422,8 @@ function simpleCommands(line) {
   endCommand();
   return commands;
 }
-function ownInWords(words, depth) {
+function ownInWords(words, cwd) {
   const first = basename(words[0]);
-  if (SHELL.test(first)) {
-    const flag = words.findIndex((word, i2) => i2 > 0 && SCRIPT_FLAG.test(word));
-    const script = words.slice(flag + 1).map((word) => /\s/.test(word) && words.length - flag > 2 ? `"${word}"` : word);
-    return flag > 0 && script.length > 0 ? ownInLine(script.join(" "), depth + 1) : null;
-  }
-  if (HARMLESS.test(first)) return "";
   let i = 0;
   if (/^npx(?:\.cmd)?$/.test(first)) {
     i++;
@@ -412,32 +433,48 @@ function ownInWords(words, depth) {
   }
   if (!words[i] || !/^code-alarm(?:\.mjs|\.cmd|\.ps1)?$/.test(basename(words[i]))) return null;
   const sub = words[i + 1];
-  return sub && SUBCOMMANDS.has(sub) ? sub : null;
+  return sub && SUBCOMMANDS.has(sub) ? { sub, cwd } : null;
 }
-function ownInLine(line, depth) {
-  if (depth > 3) return null;
+function ownInLine(line, cwd, depth) {
+  if (depth > 3 || EXPANSION.test(line)) return null;
   let own = null;
+  let dir = cwd;
   for (const words of simpleCommands(line)) {
-    const found = ownInWords(words, depth);
-    if (found === null) return null;
-    if (found && own === null) own = found;
+    const first = basename(words[0]);
+    if (CHANGE_DIR.test(first)) {
+      const args = words.slice(1).filter((word) => !/^-(?:path|literalpath)$/i.test(word));
+      if (args.length !== 1 || /[$%~*?]/.test(args[0]) || args[0] === "-") return null;
+      dir = resolve2(dir, args[0]);
+      continue;
+    }
+    let found;
+    if (SHELL.test(first)) {
+      const flag = words.findIndex((word, i) => i > 0 && SCRIPT_FLAG.test(word));
+      const script = flag > 0 ? words.slice(flag + 1) : [];
+      const inner = script.length === 1 ? script[0] : script.map((word) => /\s/.test(word) ? `"${word}"` : word).join(" ");
+      found = script.length > 0 ? ownInLine(inner, dir, depth + 1) : null;
+    } else {
+      found = ownInWords(words, dir);
+    }
+    if (!found) return null;
+    own ??= found;
   }
   return own;
 }
-function ownSubcommand(command) {
-  return command ? ownInLine(command, 0) : null;
+function ownCommand(command, cwd) {
+  return command ? ownInLine(command, resolve2(cwd), 0) : null;
 }
-function actionFor(_agent, input) {
+function actionFor(_agent, input, cwd) {
   switch (input.event) {
     case "Stop":
       return { type: "send", kind: "stopped", fallback: true, consume: true };
     case "StopFailure":
       return { type: "send", kind: "failed", fallback: false, consume: true };
     case "PermissionRequest": {
-      const own = ownSubcommand(input.command);
-      if (own === "done") return { type: "signal", kind: "done" };
-      if (own === "needs-you") return { type: "signal", kind: "needs_input" };
-      if (own === "failed") return { type: "signal", kind: "failed" };
+      const own = ownCommand(input.command, cwd);
+      if (own?.sub === "done") return { type: "signal", kind: "done", cwd: own.cwd };
+      if (own?.sub === "needs-you") return { type: "signal", kind: "needs_input", cwd: own.cwd };
+      if (own?.sub === "failed") return { type: "signal", kind: "failed", cwd: own.cwd };
       if (own) return { type: "none" };
       return { type: "send", kind: "needs_input", fallback: false, consume: false, rateLimitMs: NEEDS_INPUT_WINDOW_MS };
     }
@@ -452,11 +489,11 @@ async function runHook(agent, raw, deps) {
   try {
     const input = parseHookInput(raw);
     if (!input) return "";
-    const action = actionFor(agent, input);
-    if (action.type === "none") return "";
     const cwd = input.cwd ?? deps.cwd();
+    const action = actionFor(agent, input, cwd);
+    if (action.type === "none") return "";
     if (action.type === "signal") {
-      const result = await sendSignal(action.kind, agentOf(agent), cwd, deps, input.sessionId);
+      const result = await sendSignal(action.kind, agentOf(agent), action.cwd, deps, input.sessionId);
       return result.sent ? `hook ${agent} ${input.event}: ${action.kind} signal sent while awaiting approval` : "";
     }
     const now = deps.now();
@@ -468,6 +505,17 @@ async function runHook(agent, raw, deps) {
     }
     const arming = findArming(deps.home, cwd, now);
     if (!arming) return "";
+    const event = buildEvent({
+      kind: action.kind,
+      level: arming.level ?? "alarm",
+      label: labelFor(arming.dir ?? cwd),
+      agent: agentOf(agent),
+      now,
+      idParts: [agent, input.sessionId, input.turnId ?? input.promptId, action.kind]
+    });
+    if (action.consume && !claimEvent(deps.home, event.id, now)) {
+      return `hook ${agent} ${input.event}: skipped, already handled for this turn`;
+    }
     if (action.fallback) {
       const keys = [signalKey(arming.key, input.sessionId), arming.key];
       if (keys.some((key) => isSignaled(deps.home, key))) {
@@ -481,14 +529,6 @@ async function runHook(agent, raw, deps) {
     if (action.consume && !claim(deps.home, arming)) {
       return `hook ${agent} ${input.event}: skipped, another alert already ended this arming`;
     }
-    const event = buildEvent({
-      kind: action.kind,
-      level: arming.level ?? "alarm",
-      label: labelFor(arming.dir ?? cwd),
-      agent: agentOf(agent),
-      now,
-      idParts: [agent, input.sessionId, input.turnId ?? input.promptId, action.kind]
-    });
     await deps.send(event);
     return `hook ${agent} ${input.event}: ${action.kind} queued`;
   } catch (e) {
@@ -502,8 +542,11 @@ async function sendSignal(kind, agent, cwd, deps, sessionId) {
   const key = signalKey(arming.key, sessionId);
   const already = { sent: false, message: "That alert was already sent." };
   if (signaledKind(deps.home, key) === kind) return already;
+  try {
+    markSignaled(deps.home, key, now, kind);
+  } catch {
+  }
   if (kind !== "needs_input" && !claim(deps.home, arming)) return already;
-  markSignaled(deps.home, key, now, kind);
   const event = buildEvent({ kind, level: arming.level ?? "alarm", label: labelFor(arming.dir ?? cwd), agent, now });
   await deps.send(event);
   const what = kind === "needs_input" ? "needs you" : kind;
@@ -573,7 +616,7 @@ function codexCommand(cli) {
 }
 var UNSAFE_IN_QUOTES = /["$`]/;
 var RULES_MARK = "Written by `code-alarm install codex`";
-var SKILL_MARK = "# Code Alarm\n";
+var SKILL_MARK = "<!-- Written by `code-alarm install codex`";
 function codexRules(cli) {
   const path = JSON.stringify(slashes(cli));
   return `# ${RULES_MARK}; removed by \`code-alarm uninstall codex\`.
@@ -654,7 +697,10 @@ function installCodex(args) {
   notes.push(`Allowed Code Alarm's own commands in ${paths.rulesFile}`);
   const skillFile = join4(paths.skillDir, "SKILL.md");
   setAside(skillFile, SKILL_MARK, args.now, notes);
-  writeFileAtomic(skillFile, skillMarkdown(`node "${slashes(paths.cli)}"`, "code-alarm"));
+  const skill = skillMarkdown(`node "${slashes(paths.cli)}"`, "code-alarm");
+  writeFileAtomic(skillFile, `${skill}
+${SKILL_MARK}; removed by \`code-alarm uninstall codex\`. -->
+`);
   notes.push(`Installed the skill in ${paths.skillDir}`);
   return notes;
 }
@@ -895,7 +941,7 @@ ${log.map((line) => `  ${line}`).join("\n")}`);
       const script = process.argv[1];
       if (command === "install") {
         if (!script) throw new ConfigError("Can't tell where this code-alarm script is.");
-        for (const note of installCodex({ alarmHome: home, userHome: homedir2(), bundle: resolve2(script), now: Date.now() })) console.log(note);
+        for (const note of installCodex({ alarmHome: home, userHome: homedir2(), bundle: resolve3(script), now: Date.now() })) console.log(note);
         console.log(
           `
 Next: quit Codex completely and start it again. It reads rules only at startup, and closing

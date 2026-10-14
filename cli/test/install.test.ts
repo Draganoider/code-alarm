@@ -68,11 +68,12 @@ test("someone else's rules file or skill is backed up, and uninstall leaves thei
   mkdirSync(join(f.userHome, ".codex", "rules"), { recursive: true });
   writeFileSync(f.paths.rulesFile, "# my own rules\n");
   mkdirSync(f.paths.skillDir, { recursive: true });
-  writeFileSync(join(f.paths.skillDir, "SKILL.md"), "my own skill\n");
+  // Its own "# Code Alarm" heading doesn't make it ours.
+  writeFileSync(join(f.paths.skillDir, "SKILL.md"), "# Code Alarm\nmy own skill\n");
   writeFileSync(join(f.paths.skillDir, "notes.md"), "keep me\n");
   installCodex({ alarmHome: f.alarmHome, userHome: f.userHome, bundle: f.bundle, now: 7 });
   assert.equal(readFileSync(`${f.paths.rulesFile}.code-alarm-backup-7`, "utf8"), "# my own rules\n");
-  assert.equal(readFileSync(join(f.paths.skillDir, "SKILL.md.code-alarm-backup-7"), "utf8"), "my own skill\n");
+  assert.equal(readFileSync(join(f.paths.skillDir, "SKILL.md.code-alarm-backup-7"), "utf8"), "# Code Alarm\nmy own skill\n");
   // Installing again overwrites only our own files, with no new backups.
   installCodex({ alarmHome: f.alarmHome, userHome: f.userHome, bundle: f.bundle, now: 8 });
   assert.ok(!existsSync(`${f.paths.rulesFile}.code-alarm-backup-8`));

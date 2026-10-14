@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { HOUR } from "../src/duration.js";
-import { NEEDS_INPUT_WINDOW_MS, ownSubcommand, runHook, runSignal, sessionFromEnv } from "../src/hook.js";
-import { armNap, armProject, findArming } from "../src/state.js";
+import { NEEDS_INPUT_WINDOW_MS, ownCommand, runHook, runSignal, sessionFromEnv } from "../src/hook.js";
+import { armNap, armProject, claim, findArming } from "../src/state.js";
 import { payload, setup } from "./helpers.js";
+
+const own = (command?: string) => ownCommand(command, process.cwd())?.sub ?? null;
 
 test("an unarmed session never sends anything (DR-003)", async () => {
   const { project, sent, deps } = setup();
@@ -130,32 +133,54 @@ test("a notify arming sends notify-level events", async () => {
 });
 
 test("recognising code-alarm's own commands", () => {
-  assert.equal(ownSubcommand("code-alarm done"), "done");
-  assert.equal(ownSubcommand('node "C:/Users/a b/AppData/Roaming/code-alarm/bin/code-alarm.mjs" needs-you'), "needs-you");
-  assert.equal(ownSubcommand("C:\\x\\code-alarm.cmd failed"), "failed");
-  assert.equal(ownSubcommand("cd /work && code-alarm arm --for 2h"), "arm");
-  assert.equal(ownSubcommand("npm install code-alarm"), null);
-  assert.equal(ownSubcommand("rm -rf /code-alarm/done"), null);
-  assert.equal(ownSubcommand("my-code-alarm done"), null);
-  assert.equal(ownSubcommand(undefined), null);
+  assert.equal(own("code-alarm done"), "done");
+  assert.equal(own('node "C:/Users/a b/AppData/Roaming/code-alarm/bin/code-alarm.mjs" needs-you'), "needs-you");
+  assert.equal(own("C:\\x\\code-alarm.cmd failed"), "failed");
+  assert.equal(own("cd /work && code-alarm arm --for 2h"), "arm");
+  assert.equal(own("npm install code-alarm"), null);
+  assert.equal(own("rm -rf /code-alarm/done"), null);
+  assert.equal(own("my-code-alarm done"), null);
+  assert.equal(own(undefined), null);
   // Codex on Windows runs everything through PowerShell; the hook may see the wrapper.
   const wrapped = String.raw`"C:\Users\me\.cache\codex-runtimes\pwsh.exe" -Command "node \"C:/Users/me/AppData/Roaming/code-alarm/bin/code-alarm.mjs\" done"`;
-  assert.equal(ownSubcommand(wrapped), "done");
-  assert.equal(ownSubcommand(`bash -lc 'code-alarm needs-you'`), "needs-you");
-  assert.equal(ownSubcommand("code-alarm done;"), "done");
-  assert.equal(ownSubcommand("code-alarm done 2>&1"), "done");
-  assert.equal(ownSubcommand(`& "C:\\Users\\me\\code-alarm.cmd" failed`), "failed");
-  assert.equal(ownSubcommand("npx -y code-alarm status"), "status");
+  assert.equal(own(wrapped), "done");
+  assert.equal(own(`bash -lc 'code-alarm needs-you'`), "needs-you");
+  assert.equal(own("code-alarm done;"), "done");
+  assert.equal(own("code-alarm done 2>&1"), "done");
+  assert.equal(own(`& "C:\\Users\\me\\code-alarm.cmd" failed`), "failed");
+  assert.equal(own("npx -y code-alarm status"), "status");
 });
 
 test("text that only mentions code-alarm isn't code-alarm's own command", () => {
-  assert.equal(ownSubcommand("echo code-alarm done"), null);
-  assert.equal(ownSubcommand(`git commit -m "make code-alarm done faster"`), null);
-  assert.equal(ownSubcommand(`echo 'a; code-alarm done now'`), null);
-  assert.equal(ownSubcommand(`pwsh -Command "Write-Output 'code-alarm done'"`), null);
+  assert.equal(own("echo code-alarm done"), null);
+  assert.equal(own(`git commit -m "make code-alarm done faster"`), null);
+  assert.equal(own(`echo 'a; code-alarm done now'`), null);
+  assert.equal(own(`pwsh -Command "Write-Output 'code-alarm done'"`), null);
   // Our command chained with something else: the approval is about the other command too.
-  assert.equal(ownSubcommand("npm test && code-alarm done"), null);
-  assert.equal(ownSubcommand("cd /work"), null);
+  assert.equal(own("npm test && code-alarm done"), null);
+  assert.equal(own("cd /work"), null);
+  // Code run inside an argument, which the parser can't follow.
+  assert.equal(own(`Set-Location "$(python prepare.py)"; code-alarm status`), null);
+  assert.equal(own("cd `make-dir`; code-alarm done"), null);
+  assert.equal(own("cd $HOME && code-alarm done"), null);
+});
+
+test("a cd before code-alarm's own command is followed", () => {
+  const { root } = setup();
+  assert.deepEqual(ownCommand(`cd ${JSON.stringify(join(root, "b"))} && code-alarm done`, join(root, "a")), { sub: "done", cwd: join(root, "b") });
+  assert.deepEqual(ownCommand("cd sub; code-alarm done", join(root, "a")), { sub: "done", cwd: join(root, "a", "sub") });
+});
+
+test("an approved `cd B && code-alarm done` signals B, not the folder the agent started in", async () => {
+  const { home, root, sent, clock, deps } = setup();
+  const a = join(root, "a");
+  const b = join(root, "b");
+  armProject(home, a, clock.now + HOUR, clock.now);
+  armProject(home, b, clock.now + HOUR, clock.now);
+  const command = `cd ${JSON.stringify(b)} && code-alarm done`;
+  await runHook("claude", payload("PermissionRequest", { cwd: a, tool_input: { command } }), deps(a));
+  assert.deepEqual(sent.map((e) => [e.kind, e.label]), [["done", "b"]]);
+  assert.ok(findArming(home, a, clock.now)?.dir === a, "A is still armed");
 });
 
 test("approving a command that only mentions code-alarm is a normal needs_input", async () => {
@@ -213,6 +238,38 @@ test("done ends the turn's alerts even when a nap also covers the folder", async
   await runSignal("done", "claude-code", deps(), "sess-1");
   await runHook("claude", payload("Stop", { cwd: project, session_id: "sess-1" }), deps());
   assert.deepEqual(sent.map((e) => e.kind), ["done"]);
+});
+
+test("a Stop that fires twice for one turn adds nothing the second time", async () => {
+  const { home, project, sent, clock, deps } = setup();
+  armNap(home, clock.now + HOUR, clock.now);
+  armProject(home, project, clock.now + HOUR, clock.now);
+  await runSignal("done", "claude-code", deps(), "sess-1");
+  await runHook("claude", payload("Stop", { cwd: project, session_id: "sess-1" }), deps());
+  await runHook("claude", payload("Stop", { cwd: project, session_id: "sess-1" }), deps());
+  assert.deepEqual(sent.map((e) => e.kind), ["done"]);
+  // Without an explicit signal, a repeated Stop also rings once.
+  await runHook("claude", payload("Stop", { cwd: project, session_id: "sess-1", prompt_id: "p2" }), deps());
+  await runHook("claude", payload("Stop", { cwd: project, session_id: "sess-1", prompt_id: "p2" }), deps());
+  assert.deepEqual(sent.map((e) => e.kind), ["done", "stopped"]);
+});
+
+test("if the signal can't be recorded, the alert is still sent", async () => {
+  const { home, project, sent, clock, deps } = setup();
+  armProject(home, project, clock.now + HOUR, clock.now);
+  writeFileSync(join(home, "signaled"), "a file where the folder should be");
+  const result = await runSignal("done", "claude-code", deps(), "sess-1");
+  assert.equal(result.sent, true);
+  assert.deepEqual(sent.map((e) => e.kind), ["done"]);
+});
+
+test("a hook that saw an older arming can't use up a newer one", () => {
+  const { home, project, clock } = setup();
+  armProject(home, project, clock.now + HOUR, clock.now);
+  const seen = findArming(home, project, clock.now)!;
+  armProject(home, project, clock.now + 2 * HOUR, clock.now + 1, "notify");
+  assert.equal(claim(home, seen), false);
+  assert.equal(findArming(home, project, clock.now + 1)?.level, "notify", "the new arming is untouched");
 });
 
 test("two alerts racing for one project arming: only the first claim sends", async () => {

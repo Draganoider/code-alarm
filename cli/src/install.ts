@@ -37,7 +37,7 @@ const UNSAFE_IN_QUOTES = /["$`]/;
 
 /** Marks a rules file or skill as ours, so we never overwrite or delete someone else's. */
 const RULES_MARK = "Written by `code-alarm install codex`";
-const SKILL_MARK = "# Code Alarm\n";
+const SKILL_MARK = "<!-- Written by `code-alarm install codex`";
 
 /**
  * A Codex rules file (https://developers.openai.com/codex/rules) that lets the agent run Code
@@ -160,7 +160,8 @@ export function installCodex(args: { alarmHome: string; userHome: string; bundle
 
   const skillFile = join(paths.skillDir, "SKILL.md");
   setAside(skillFile, SKILL_MARK, args.now, notes);
-  writeFileAtomic(skillFile, skillMarkdown(`node "${slashes(paths.cli)}"`, "code-alarm"));
+  const skill = skillMarkdown(`node "${slashes(paths.cli)}"`, "code-alarm");
+  writeFileAtomic(skillFile, `${skill}\n${SKILL_MARK}; removed by \`code-alarm uninstall codex\`. -->\n`);
   notes.push(`Installed the skill in ${paths.skillDir}`);
   return notes;
 }

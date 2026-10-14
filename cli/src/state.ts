@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { Kind, Level } from "./events.js";
 import { writeFileAtomic } from "./fsutil.js";
@@ -113,8 +113,39 @@ export function claim(home: string, arming: FoundArming): boolean {
   } catch {
     return false;
   }
+  try {
+    const taken = JSON.parse(readFileSync(claimed, "utf8")) as Arming;
+    if (taken.armedAt !== arming.armedAt || taken.until !== arming.until) {
+      // Armed again since this hook looked: that's new work, so put it back untouched.
+      if (existsSync(path)) rmSync(claimed, { force: true });
+      else renameSync(claimed, path);
+      return false;
+    }
+  } catch {
+    // Unreadable: it was ours to use up anyway.
+  }
   rmSync(claimed, { force: true });
   return true;
+}
+
+/**
+ * True the first time an event ID is claimed, false after that. A hook that fires twice for one
+ * turn builds the same ID, so it sends once. Claims older than a day are cleared away.
+ */
+export function claimEvent(home: string, id: string, now: number): boolean {
+  const dir = join(home, "events");
+  try {
+    mkdirSync(dir, { recursive: true });
+    for (const file of readdirSync(dir)) {
+      const path = join(dir, file);
+      if (now - statSync(path).mtimeMs > 24 * 60 * 60_000) rmSync(path, { force: true });
+    }
+    closeSync(openSync(join(dir, id), "wx"));
+    return true;
+  } catch (e) {
+    // Already claimed. Any other problem mustn't stop the alert.
+    return (e as NodeJS.ErrnoException).code !== "EEXIST";
+  }
 }
 
 export function disarmProject(home: string, dir: string): boolean {

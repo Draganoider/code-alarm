@@ -63,8 +63,10 @@ The installers pre-approve code-alarm's own commands, so an agent normally never
 
 When one still asks to run `code-alarm done`, that request counts as the signal. You get the
 right alert even when nobody is there to approve. Only a command that runs code-alarm itself counts
-(optionally after `cd`, or inside a shell wrapper such as `pwsh -Command`): text that merely
-mentions it, like a commit message, is an ordinary approval.
+(after plain `cd`s, which set the folder it signals for, or inside a shell wrapper such as
+`pwsh -Command`). Text that merely mentions it, like a commit message, and anything the hook can't
+follow, like `$(…)`, is an ordinary approval. An end-of-turn hook that fires twice for one turn
+sends once.
 
 ## Transports
 
