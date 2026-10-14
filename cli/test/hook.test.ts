@@ -176,6 +176,8 @@ test("a cd before code-alarm's own command is followed", () => {
   const { root } = setup();
   assert.deepEqual(ownCommand(`cd ${JSON.stringify(join(root, "b"))} && code-alarm done`, join(root, "a")), { sub: "done", cwd: join(root, "b") });
   assert.deepEqual(ownCommand("cd sub; code-alarm done", join(root, "a")), { sub: "done", cwd: join(root, "a", "sub") });
+  assert.deepEqual(ownCommand("cd RUNNER~1 && code-alarm done", root)?.cwd, join(root, "RUNNER~1"));
+  assert.equal(ownCommand("cd ~/b && code-alarm done", root), null);
 });
 
 test("an approved `cd B && code-alarm done` signals B, not the folder the agent started in", async () => {

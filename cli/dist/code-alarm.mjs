@@ -455,7 +455,7 @@ function ownInLine(line, cwd, depth) {
     const first = basename(words[0]);
     if (CHANGE_DIR.test(first)) {
       const args = words.slice(1).filter((word) => !/^-(?:path|literalpath)$/i.test(word));
-      if (args.length !== 1 || /[$%~*?]/.test(args[0]) || args[0] === "-") return null;
+      if (args.length !== 1 || /[$%*?]|^~/.test(args[0]) || args[0] === "-") return null;
       dir = resolve2(dir, args[0]);
       continue;
     }

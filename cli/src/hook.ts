@@ -145,7 +145,9 @@ function ownInLine(line: string, cwd: string, depth: number): OwnCommand | null 
     if (CHANGE_DIR.test(first)) {
       // Follow a plain `cd <folder>`, so a signal is for the folder it runs in.
       const args = words.slice(1).filter((word) => !/^-(?:path|literalpath)$/i.test(word));
-      if (args.length !== 1 || /[$%~*?]/.test(args[0]!) || args[0] === "-") return null;
+      // Not followed: variables, wildcards, `~` (home) at the start, and `cd -`. A `~` inside, as
+      // in a Windows short name like RUNNER~1, is just a character.
+      if (args.length !== 1 || /[$%*?]|^~/.test(args[0]!) || args[0] === "-") return null;
       dir = resolve(dir, args[0]!);
       continue;
     }
