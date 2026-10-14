@@ -211,7 +211,7 @@ import { resolve as resolve2 } from "node:path";
 
 // src/state.ts
 import { createHash as createHash2 } from "node:crypto";
-import { closeSync, existsSync as existsSync2, mkdirSync as mkdirSync3, openSync, readdirSync, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, statSync as statSync2 } from "node:fs";
+import { closeSync, existsSync as existsSync2, linkSync, mkdirSync as mkdirSync3, openSync, readdirSync, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, statSync as statSync2 } from "node:fs";
 import { isAbsolute, join as join3, relative, resolve } from "node:path";
 var NAP_KEY = "nap";
 function normalize(dir, platform = process.platform) {
@@ -282,14 +282,19 @@ function claim(home, arming) {
   const claimed = `${path}.${process.pid}.${Date.now()}.claimed`;
   try {
     renameSync2(path, claimed);
-  } catch {
-    return false;
+  } catch (e) {
+    if (e.code === "ENOENT") return false;
+    rmSync(path, { force: true });
+    return true;
   }
   try {
     const taken = JSON.parse(readFileSync3(claimed, "utf8"));
     if (taken.armedAt !== arming.armedAt || taken.until !== arming.until) {
-      if (existsSync2(path)) rmSync(claimed, { force: true });
-      else renameSync2(claimed, path);
+      try {
+        linkSync(claimed, path);
+      } catch {
+      }
+      rmSync(claimed, { force: true });
       return false;
     }
   } catch {
@@ -302,8 +307,11 @@ function claimEvent(home, id, now) {
   try {
     mkdirSync3(dir, { recursive: true });
     for (const file of readdirSync(dir)) {
-      const path = join3(dir, file);
-      if (now - statSync2(path).mtimeMs > 24 * 60 * 6e4) rmSync(path, { force: true });
+      try {
+        const path = join3(dir, file);
+        if (now - statSync2(path).mtimeMs > 24 * 60 * 6e4) rmSync(path, { force: true });
+      } catch {
+      }
     }
     closeSync(openSync(join3(dir, id), "wx"));
     return true;
@@ -378,6 +386,7 @@ function parseHookInput(raw) {
   }
 }
 var SUBCOMMANDS = /* @__PURE__ */ new Set(["arm", "disarm", "nap", "status", "test", "init", "install", "uninstall", "done", "needs-you", "failed", "help", "version"]);
+var SIGNALS = /* @__PURE__ */ new Set(["done", "needs-you", "failed"]);
 var SHELL = /^(?:pwsh|powershell|bash|sh|zsh|cmd)(?:\.exe)?$/;
 var SCRIPT_FLAG = /^[-/](?:c|lc|command)$/i;
 var CHANGE_DIR = /^(?:cd|chdir|pushd|set-location|sl)$/;
@@ -410,7 +419,9 @@ function simpleCommands(line) {
       inWord = true;
     } else if (c === "&" && word.endsWith(">")) {
       word += c;
-    } else if (";&|\n\r()".includes(c)) {
+    } else if (c === "(" || c === ")") {
+      return null;
+    } else if (";&|\n\r".includes(c)) {
       endCommand();
     } else if (/\s/.test(c)) {
       endWord();
@@ -436,10 +447,11 @@ function ownInWords(words, cwd) {
   return sub && SUBCOMMANDS.has(sub) ? { sub, cwd } : null;
 }
 function ownInLine(line, cwd, depth) {
-  if (depth > 3 || EXPANSION.test(line)) return null;
+  const commands = depth > 3 || EXPANSION.test(line) ? null : simpleCommands(line);
+  if (!commands) return null;
   let own = null;
   let dir = cwd;
-  for (const words of simpleCommands(line)) {
+  for (const words of commands) {
     const first = basename(words[0]);
     if (CHANGE_DIR.test(first)) {
       const args = words.slice(1).filter((word) => !/^-(?:path|literalpath)$/i.test(word));
@@ -457,7 +469,7 @@ function ownInLine(line, cwd, depth) {
       found = ownInWords(words, dir);
     }
     if (!found) return null;
-    own ??= found;
+    if (!own || !SIGNALS.has(own.sub) && SIGNALS.has(found.sub)) own = found;
   }
   return own;
 }

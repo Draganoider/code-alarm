@@ -163,6 +163,13 @@ test("text that only mentions code-alarm isn't code-alarm's own command", () => 
   assert.equal(own(`Set-Location "$(python prepare.py)"; code-alarm status`), null);
   assert.equal(own("cd `make-dir`; code-alarm done"), null);
   assert.equal(own("cd $HOME && code-alarm done"), null);
+  // A cd inside a subshell doesn't move the next command; brackets aren't followed at all.
+  assert.equal(own("(cd ../b); code-alarm done"), null);
+});
+
+test("a signal wins over a silent code-alarm command next to it", () => {
+  assert.equal(own("code-alarm status; code-alarm done"), "done");
+  assert.equal(own("code-alarm needs-you && code-alarm status"), "needs-you");
 });
 
 test("a cd before code-alarm's own command is followed", () => {

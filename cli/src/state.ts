@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
+import { closeSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { Kind, Level } from "./events.js";
 import { writeFileAtomic } from "./fsutil.js";
@@ -110,15 +110,24 @@ export function claim(home: string, arming: FoundArming): boolean {
   const claimed = `${path}.${process.pid}.${Date.now()}.claimed`;
   try {
     renameSync(path, claimed);
-  } catch {
-    return false;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false; // another alert used it up
+    // Couldn't rename it (on Windows, another program may hold it open): end it some other way and
+    // send anyway. A rare duplicate is better than a lost alert.
+    rmSync(path, { force: true });
+    return true;
   }
   try {
     const taken = JSON.parse(readFileSync(claimed, "utf8")) as Arming;
     if (taken.armedAt !== arming.armedAt || taken.until !== arming.until) {
-      // Armed again since this hook looked: that's new work, so put it back untouched.
-      if (existsSync(path)) rmSync(claimed, { force: true });
-      else renameSync(claimed, path);
+      // Armed again since this hook looked: that's new work, so put it back, unless something even
+      // newer has taken its place (a hard link never replaces an existing file).
+      try {
+        linkSync(claimed, path);
+      } catch {
+        // The newer one stays.
+      }
+      rmSync(claimed, { force: true });
       return false;
     }
   } catch {
@@ -137,8 +146,12 @@ export function claimEvent(home: string, id: string, now: number): boolean {
   try {
     mkdirSync(dir, { recursive: true });
     for (const file of readdirSync(dir)) {
-      const path = join(dir, file);
-      if (now - statSync(path).mtimeMs > 24 * 60 * 60_000) rmSync(path, { force: true });
+      try {
+        const path = join(dir, file);
+        if (now - statSync(path).mtimeMs > 24 * 60 * 60_000) rmSync(path, { force: true });
+      } catch {
+        // Another hook cleared it first.
+      }
     }
     closeSync(openSync(join(dir, id), "wx"));
     return true;

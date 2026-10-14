@@ -57,6 +57,7 @@ export function parseHookInput(raw: string): HookInput | null {
 }
 
 const SUBCOMMANDS = new Set(["arm", "disarm", "nap", "status", "test", "init", "install", "uninstall", "done", "needs-you", "failed", "help", "version"]);
+const SIGNALS = new Set(["done", "needs-you", "failed"]);
 const SHELL = /^(?:pwsh|powershell|bash|sh|zsh|cmd)(?:\.exe)?$/;
 const SCRIPT_FLAG = /^[-/](?:c|lc|command)$/i;
 const CHANGE_DIR = /^(?:cd|chdir|pushd|set-location|sl)$/;
@@ -72,11 +73,12 @@ export interface OwnCommand {
 }
 
 /**
- * Splits a command line into simple commands (on `;`, `&`, `|`, newlines and brackets outside
- * quotes), each a list of words with their quotes removed. Close enough to the shells agents use
- * to find which programs a command runs, which is all it's for.
+ * Splits a command line into simple commands (on `;`, `&`, `|` and newlines outside quotes), each
+ * a list of words with their quotes removed. Close enough to the shells agents use to find which
+ * programs a command runs, which is all it's for. Null for brackets (subshells, groups), whose
+ * scoping it doesn't follow.
  */
-function simpleCommands(line: string): string[][] {
+function simpleCommands(line: string): string[][] | null {
   const commands: string[][] = [];
   let words: string[] = [];
   let word = "";
@@ -103,7 +105,9 @@ function simpleCommands(line: string): string[][] {
       inWord = true;
     } else if (c === "&" && word.endsWith(">")) {
       word += c;
-    } else if (";&|\n\r()".includes(c)) {
+    } else if (c === "(" || c === ")") {
+      return null;
+    } else if (";&|\n\r".includes(c)) {
       endCommand();
     } else if (/\s/.test(c)) {
       endWord();
@@ -132,10 +136,11 @@ function ownInWords(words: string[], cwd: string): OwnCommand | null {
 }
 
 function ownInLine(line: string, cwd: string, depth: number): OwnCommand | null {
-  if (depth > 3 || EXPANSION.test(line)) return null;
+  const commands = depth > 3 || EXPANSION.test(line) ? null : simpleCommands(line);
+  if (!commands) return null;
   let own: OwnCommand | null = null;
   let dir = cwd;
-  for (const words of simpleCommands(line)) {
+  for (const words of commands) {
     const first = basename(words[0]!);
     if (CHANGE_DIR.test(first)) {
       // Follow a plain `cd <folder>`, so a signal is for the folder it runs in.
@@ -155,7 +160,8 @@ function ownInLine(line: string, cwd: string, depth: number): OwnCommand | null 
       found = ownInWords(words, dir);
     }
     if (!found) return null; // something else runs too, so the approval is about more than us
-    own ??= found;
+    // A signal (done, needs-you, failed) wins over a silent command like status next to it.
+    if (!own || (!SIGNALS.has(own.sub) && SIGNALS.has(found.sub))) own = found;
   }
   return own;
 }
