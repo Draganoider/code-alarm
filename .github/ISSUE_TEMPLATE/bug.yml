@@ -1,0 +1,29 @@
+name: Bug
+description: The alarm didn't ring, rang when it shouldn't have, or something else is wrong
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **A ring for work you didn't arm is the most serious bug here.** Say so in the title.
+        Never paste your ntfy topic, a token or your config file.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: "`code-alarm --version`, your agent and its version, your OS"
+      placeholder: "code-alarm 0.1.0, Claude Code 2.1.295, Windows 11"
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `code-alarm status`
+      description: It shows only the start of your topic. Check it before pasting.
+      render: text
