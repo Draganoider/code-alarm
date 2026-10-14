@@ -65,7 +65,7 @@ import { join as join2 } from "node:path";
 
 // src/events.ts
 import { createHash, randomUUID } from "node:crypto";
-var EVENT_FIELDS = ["v", "id", "kind", "label", "agent", "sent_at", "expires_at"];
+var EVENT_FIELDS = ["v", "id", "kind", "level", "label", "agent", "sent_at", "expires_at"];
 var KINDS = ["done", "needs_input", "failed", "stopped", "test"];
 var DEFAULT_TTL_MS = 30 * 6e4;
 var MAX_LABEL = 40;
@@ -83,6 +83,7 @@ function buildEvent(args) {
     v: 1,
     id: eventId(args.idParts),
     kind: args.kind,
+    level: args.level ?? "alarm",
     label: args.label.slice(0, MAX_LABEL),
     agent: args.agent,
     sent_at: args.now,
@@ -114,8 +115,9 @@ function ntfyRequest(event, config) {
         topic: config.topic,
         title: event.kind === "test" ? text.title : `${text.title}: ${event.label}`,
         message: text.message(agentName(event.agent)),
-        // 5 is ntfy's "max" priority: the one the app can keep ringing through Do Not Disturb.
-        priority: 5,
+        // 5 is ntfy's "max" priority: the one the app keeps ringing, through Do Not Disturb if the
+        // subscription allows it. 3 is its default: one ordinary notification.
+        priority: event.level === "notify" ? 3 : 5,
         tags: text.tags
       })
     }
@@ -218,15 +220,15 @@ function keyFor(dir) {
 var armedDir = (home) => join3(home, "armed");
 var signalFile = (home, key) => join3(home, "signaled", `${key}.json`);
 var sentFile = (home, key, kind) => join3(home, "sent", `${key}-${kind}.json`);
-function armProject(home, dir, until, now) {
-  const arming = { kind: "project", dir: resolve(dir), armedAt: now, until };
+function armProject(home, dir, until, now, level = "alarm") {
+  const arming = { kind: "project", level, dir: resolve(dir), armedAt: now, until };
   const key = keyFor(dir);
   writeFileAtomic(join3(armedDir(home), `${key}.json`), JSON.stringify(arming));
   clearSignaled(home, key);
   return { ...arming, key };
 }
-function armNap(home, until, now) {
-  const arming = { kind: "nap", armedAt: now, until };
+function armNap(home, until, now, level = "alarm") {
+  const arming = { kind: "nap", level, armedAt: now, until };
   writeFileAtomic(join3(armedDir(home), `${NAP_KEY}.json`), JSON.stringify(arming));
   clearSignaled(home, NAP_KEY);
   return { ...arming, key: NAP_KEY };
@@ -280,11 +282,19 @@ function disarmAll(home) {
   for (const file of files) rmSync(join3(dir, file), { force: true });
   return files.length;
 }
-function markSignaled(home, key, now) {
-  writeFileAtomic(signalFile(home, key), JSON.stringify({ at: now }));
+function markSignaled(home, key, now, kind) {
+  writeFileAtomic(signalFile(home, key), JSON.stringify({ at: now, kind }));
 }
 function isSignaled(home, key) {
   return existsSync2(signalFile(home, key));
+}
+function signaledKind(home, key) {
+  try {
+    const { kind } = JSON.parse(readFileSync3(signalFile(home, key), "utf8"));
+    return kind ?? null;
+  } catch {
+    return null;
+  }
 }
 function clearSignaled(home, key) {
   rmSync(signalFile(home, key), { force: true });
@@ -309,30 +319,39 @@ function parseHookInput(raw) {
     const data = JSON.parse(raw);
     const event = str(data.hook_event_name);
     if (!event) return null;
+    const toolInput = data.tool_input && typeof data.tool_input === "object" ? data.tool_input : {};
     return {
       event,
       sessionId: str(data.session_id),
       cwd: str(data.cwd),
       turnId: str(data.turn_id),
       promptId: str(data.prompt_id),
-      notificationType: str(data.notification_type)
+      command: str(toolInput.command)
     };
   } catch {
     return null;
   }
 }
-function actionFor(agent, input) {
+var SUBCOMMANDS = "arm|disarm|nap|status|test|init|install|uninstall|done|needs-you|failed|help|version";
+function ownSubcommand(command) {
+  if (!command) return null;
+  const match = new RegExp(`(?:^|[\\s"'\\\\/;&|])code-alarm(?:\\.mjs|\\.cmd)?["']?\\s+(${SUBCOMMANDS})(?=$|\\s)`).exec(command);
+  return match ? match[1] : null;
+}
+function actionFor(_agent, input) {
   switch (input.event) {
     case "Stop":
       return { type: "send", kind: "stopped", fallback: true, consume: true };
     case "StopFailure":
-      return agent === "claude" ? { type: "send", kind: "failed", fallback: false, consume: true } : { type: "none" };
-    case "Notification":
-      if (agent !== "claude") return { type: "none" };
-      if (input.notificationType && input.notificationType !== "permission_prompt") return { type: "none" };
+      return { type: "send", kind: "failed", fallback: false, consume: true };
+    case "PermissionRequest": {
+      const own = ownSubcommand(input.command);
+      if (own === "done") return { type: "signal", kind: "done" };
+      if (own === "needs-you") return { type: "signal", kind: "needs_input" };
+      if (own === "failed") return { type: "signal", kind: "failed" };
+      if (own) return { type: "none" };
       return { type: "send", kind: "needs_input", fallback: false, consume: false, rateLimitMs: NEEDS_INPUT_WINDOW_MS };
-    case "PermissionRequest":
-      return agent === "codex" ? { type: "send", kind: "needs_input", fallback: false, consume: false, rateLimitMs: NEEDS_INPUT_WINDOW_MS } : { type: "none" };
+    }
     case "UserPromptSubmit":
       return { type: "clear-signal" };
     default:
@@ -347,6 +366,10 @@ async function runHook(agent, raw, deps) {
     const action = actionFor(agent, input);
     if (action.type === "none") return "";
     const cwd = input.cwd ?? deps.cwd();
+    if (action.type === "signal") {
+      const result = await sendSignal(action.kind, agentOf(agent), cwd, deps);
+      return result.sent ? `hook ${agent} ${input.event}: ${action.kind} signal sent while awaiting approval` : "";
+    }
     const now = deps.now();
     const arming = findArming(deps.home, cwd, now);
     if (!arming) return "";
@@ -363,6 +386,7 @@ async function runHook(agent, raw, deps) {
     }
     const event = buildEvent({
       kind: action.kind,
+      level: arming.level ?? "alarm",
       label: labelFor(arming.dir ?? cwd),
       agent: agentOf(agent),
       now,
@@ -375,17 +399,20 @@ async function runHook(agent, raw, deps) {
     return `hook ${agent}: error ${e instanceof Error ? e.message : String(e)}`;
   }
 }
-async function runSignal(kind, agent, deps) {
-  const cwd = deps.cwd();
+async function sendSignal(kind, agent, cwd, deps) {
   const now = deps.now();
   const arming = findArming(deps.home, cwd, now);
   if (!arming) return { sent: false, message: "Not armed here, so nothing was sent." };
-  const event = buildEvent({ kind, label: labelFor(arming.dir ?? cwd), agent, now });
+  if (signaledKind(deps.home, arming.key) === kind) return { sent: false, message: "That alert was already sent." };
+  const event = buildEvent({ kind, level: arming.level ?? "alarm", label: labelFor(arming.dir ?? cwd), agent, now });
   await deps.send(event);
-  markSignaled(deps.home, arming.key, now);
+  markSignaled(deps.home, arming.key, now, kind);
   if (kind !== "needs_input") consume(deps.home, arming);
   const what = kind === "needs_input" ? "needs you" : kind;
-  return { sent: true, message: `Alarm sent: ${what} (${event.label}).` };
+  return { sent: true, message: `${arming.level === "notify" ? "Notification" : "Alarm"} sent: ${what} (${event.label}).` };
+}
+async function runSignal(kind, agent, deps) {
+  return sendSignal(kind, agent, deps.cwd(), deps);
 }
 
 // src/install.ts
@@ -393,11 +420,12 @@ import { copyFileSync, existsSync as existsSync3, mkdirSync as mkdirSync4, readF
 import { dirname as dirname2, join as join4 } from "node:path";
 
 // src/skill.ts
-function skillMarkdown(cli, name) {
+function skillMarkdown(cli, name, allowedTools) {
   return `---
 name: ${name}
 description: Ring the user's phone with a loud alarm when this task is finished or when you need their input. Use when the user asks to be woken, alarmed, called or pinged when the work is done, says they're going to sleep or stepping away while you work, or invokes this skill directly.
----
+${allowedTools ? `allowed-tools: ${allowedTools}
+` : ""}---
 
 # Code Alarm
 
@@ -406,6 +434,8 @@ when it's really time for them to come back.
 
 1. **Before you start the work**, arm it from the project folder:
    \`${cli} arm\`
+   If the user wants a quiet notification instead of an alarm (they said "quiet", "notify" or "no
+   alarm", or passed it as an argument), arm with \`${cli} arm --notify\` instead.
    If it says Code Alarm isn't set up, tell the user to run \`code-alarm init\` in a terminal, and
    continue with the task without the alarm.
 2. Do the task as usual.
@@ -427,6 +457,7 @@ but the user isn't left waiting.
 function codexPaths(alarmHome2, userHome) {
   return {
     hooksFile: join4(userHome, ".codex", "hooks.json"),
+    rulesFile: join4(userHome, ".codex", "rules", "code-alarm.rules"),
     skillDir: join4(userHome, ".agents", "skills", "code-alarm"),
     // A fixed path: Codex trusts a hook by its exact command, so updating code-alarm must not change it.
     cli: join4(alarmHome2, "bin", "code-alarm.mjs")
@@ -435,6 +466,20 @@ function codexPaths(alarmHome2, userHome) {
 var CODEX_EVENTS = ["Stop", "PermissionRequest", "UserPromptSubmit"];
 function codexCommand(cli) {
   return `node "${cli.replace(/\\/g, "/")}" hook codex`;
+}
+function codexRules(cli) {
+  const path = cli.replace(/\\/g, "/");
+  return `# Written by \`code-alarm install codex\`; removed by \`code-alarm uninstall codex\`.
+# Lets Codex run Code Alarm's own commands without asking: they only change its arming state
+# and send an alarm.
+prefix_rule(
+    pattern = ["node", "${path}", ["arm", "disarm", "nap", "status", "done", "needs-you", "failed"]],
+    decision = "allow",
+    justification = "Code Alarm's own commands: arming state and alarms only.",
+    match = ['node "${path}" done', 'node "${path}" arm --notify'],
+    not_match = ['node "${path}" install codex'],
+)
+`;
 }
 var isOurs = (handler) => typeof handler.command === "string" && /code-alarm\.mjs"? hook codex/.test(handler.command);
 function withoutCodeAlarm(file) {
@@ -478,6 +523,8 @@ function installCodex(args) {
   }
   writeFileAtomic(paths.hooksFile, JSON.stringify(withCodeAlarm(current, paths.cli), null, 2) + "\n");
   notes.push(`Added hooks for ${CODEX_EVENTS.join(", ")} to ${paths.hooksFile}`);
+  writeFileAtomic(paths.rulesFile, codexRules(paths.cli));
+  notes.push(`Allowed Code Alarm's own commands in ${paths.rulesFile}`);
   writeFileAtomic(join4(paths.skillDir, "SKILL.md"), skillMarkdown(`node "${paths.cli.replace(/\\/g, "/")}"`, "code-alarm"));
   notes.push(`Installed the skill in ${paths.skillDir}`);
   return notes;
@@ -488,6 +535,10 @@ function uninstallCodex(args) {
   if (existsSync3(paths.hooksFile)) {
     writeFileAtomic(paths.hooksFile, JSON.stringify(withoutCodeAlarm(readHooksFile(paths.hooksFile)), null, 2) + "\n");
     notes.push(`Removed code-alarm's hooks from ${paths.hooksFile}`);
+  }
+  if (existsSync3(paths.rulesFile)) {
+    rmSync2(paths.rulesFile, { force: true });
+    notes.push(`Removed ${paths.rulesFile}`);
   }
   if (existsSync3(paths.skillDir)) {
     rmSync2(paths.skillDir, { recursive: true, force: true });
@@ -522,12 +573,14 @@ var HELP = `code-alarm ${VERSION}: a real alarm on your phone when Claude Code o
 Setup
   code-alarm init [--server URL] [--topic NAME] [--token TOKEN] [--force]
                                  Create a private ntfy topic and show how to subscribe on the phone
-  code-alarm test                Ring the phone now
+  code-alarm test [--notify]     Ring the phone now (or send a plain notification)
   code-alarm install codex       Add Code Alarm's hooks and skill to Codex (uninstall codex removes them)
 
 Arming (only armed work rings)
-  code-alarm arm [--for 12h]     Ring when the agent in this folder next finishes, stops or needs you
-  code-alarm nap <2h>            Ring for every session until the time is up
+  code-alarm arm [--for 12h] [--notify]
+                                 Ring when the agent in this folder next finishes, stops or needs you
+  code-alarm nap <2h> [--notify] Ring for every session until the time is up
+                                 --notify: one ordinary notification instead of the alarm
   code-alarm disarm [--all]      Cancel arming for this folder (or everything)
   code-alarm status              What's set up, what's armed, the last alerts
 
@@ -586,7 +639,7 @@ async function main(argv) {
       return 0;
     }
     case "__skill":
-      process.stdout.write(skillMarkdown(rest[0] ?? "code-alarm", rest[1] ?? "alarm"));
+      process.stdout.write(skillMarkdown(rest[0] ?? "code-alarm", rest[1] ?? "alarm", rest[2]));
       return 0;
     case "init": {
       const { values } = parseArgs({
@@ -624,17 +677,18 @@ Then connect your agent:
       return 0;
     }
     case "test": {
+      const { values } = parseArgs({ args: rest, options: { notify: { type: "boolean" } } });
       if (!loadConfig(home)) {
         console.log(setupHint());
         return 1;
       }
-      const event = buildEvent({ kind: "test", label: "test", agent: "cli", now: Date.now() });
+      const event = buildEvent({ kind: "test", level: values.notify ? "notify" : "alarm", label: "test", agent: "cli", now: Date.now() });
       const result = await sendNow(home, event);
       console.log(result.ok ? "Sent. Your phone should be ringing now." : `Couldn't send the test alarm: ${result.detail}.`);
       return result.ok ? 0 : 1;
     }
     case "arm": {
-      const { values } = parseArgs({ args: rest, options: { for: { type: "string" } } });
+      const { values } = parseArgs({ args: rest, options: { for: { type: "string" }, notify: { type: "boolean" } } });
       if (!loadConfig(home)) {
         console.log(setupHint());
         return 1;
@@ -642,22 +696,26 @@ Then connect your agent:
       const ms = values.for ? parseDuration(values.for) : DEFAULT_ARM_MS;
       if (!ms || ms > MAX_ARM_MS) throw new ConfigError(`--for takes a duration like 2h, 90m or 1h30m, at most 24h.`);
       const now = Date.now();
-      const arming = armProject(home, process.cwd(), now + ms, now);
+      const level = values.notify ? "notify" : "alarm";
+      const arming = armProject(home, process.cwd(), now + ms, now, level);
       console.log(
-        `Armed "${labelFor(arming.dir ?? process.cwd())}" until ${clock(arming.until)} (${formatDuration(ms)}). The phone rings the next time the agent here finishes, stops or needs you.`
+        `Armed "${labelFor(arming.dir ?? process.cwd())}" until ${clock(arming.until)} (${formatDuration(ms)}). ` + (level === "notify" ? "The phone gets one notification the next time the agent here finishes, stops or needs you." : "The phone rings the next time the agent here finishes, stops or needs you.")
       );
       return 0;
     }
     case "nap": {
-      const ms = rest[0] ? parseDuration(rest[0]) : null;
+      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { notify: { type: "boolean" } } });
+      const ms = positionals[0] ? parseDuration(positionals[0]) : null;
       if (!ms || ms > MAX_ARM_MS) throw new ConfigError("Usage: code-alarm nap <duration>, like 2h or 45m (at most 24h).");
       if (!loadConfig(home)) {
         console.log(setupHint());
         return 1;
       }
       const now = Date.now();
-      armNap(home, now + ms, now);
-      console.log(`Nap mode until ${clock(now + ms)}: every session that finishes, stops or needs you rings the phone.`);
+      armNap(home, now + ms, now, values.notify ? "notify" : "alarm");
+      console.log(
+        `Nap mode until ${clock(now + ms)}: every session that finishes, stops or needs you ` + (values.notify ? "sends a notification." : "rings the phone.")
+      );
       return 0;
     }
     case "disarm": {
@@ -679,7 +737,8 @@ Then connect your agent:
       console.log(armings.length ? "Armed:" : "Nothing is armed.");
       for (const arming of armings) {
         const what = arming.kind === "nap" ? "nap mode, every session" : `${arming.dir}`;
-        console.log(`  - ${what} until ${clock(arming.until)} (${formatDuration(arming.until - now)} left)`);
+        const level = arming.level === "notify" ? ", notification only" : "";
+        console.log(`  - ${what} until ${clock(arming.until)} (${formatDuration(arming.until - now)} left${level})`);
       }
       console.log(`Codex hooks: ${codexInstalled(home, homedir2()) ? "installed" : "not installed"}`);
       const log = recentLog(home, 5);
@@ -704,7 +763,8 @@ ${log.map((line) => `  ${line}`).join("\n")}`);
         for (const note of installCodex({ alarmHome: home, userHome: homedir2(), bundle: resolve2(script), now: Date.now() })) console.log(note);
         console.log(
           `
-Next: open Codex and approve (trust) the new hooks when it asks. Codex skips hooks until you do.
+Next: restart Codex (it reads rules at startup) and approve (trust) the new hooks when it asks.
+Codex skips hooks until you do.
 Then, before a long task, ask Codex to use the code-alarm skill (or say "wake me when it's done").`
         );
       } else {

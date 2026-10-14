@@ -1,6 +1,7 @@
 ---
 name: alarm
 description: Ring the user's phone with a loud alarm when this task is finished or when you need their input. Use when the user asks to be woken, alarmed, called or pinged when the work is done, says they're going to sleep or stepping away while you work, or invokes this skill directly.
+allowed-tools: Bash(code-alarm *) PowerShell(code-alarm *)
 ---
 
 # Code Alarm
@@ -10,6 +11,8 @@ when it's really time for them to come back.
 
 1. **Before you start the work**, arm it from the project folder:
    `code-alarm arm`
+   If the user wants a quiet notification instead of an alarm (they said "quiet", "notify" or "no
+   alarm", or passed it as an argument), arm with `code-alarm arm --notify` instead.
    If it says Code Alarm isn't set up, tell the user to run `code-alarm init` in a terminal, and
    continue with the task without the alarm.
 2. Do the task as usual.

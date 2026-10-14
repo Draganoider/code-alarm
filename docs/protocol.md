@@ -11,6 +11,7 @@ computer: no prompts, code, file paths, transcripts or assistant messages. A tes
   "v": 1,
   "id": "6f1c2a9e-4b7d-8e21-a0c3-5d9f1e2b7c44",
   "kind": "done",
+  "level": "alarm",
   "label": "my-project",
   "agent": "claude-code",
   "sent_at": 1760400000000,
@@ -23,6 +24,7 @@ computer: no prompts, code, file paths, transcripts or assistant messages. A tes
 | `v` | Protocol version, `1` |
 | `id` | Hook events: derived from the agent, session, turn and kind, so a hook that fires twice for the same turn produces the same ID. Explicit signals: random |
 | `kind` | `done`, `needs_input`, `failed`, `stopped` or `test` |
+| `level` | `alarm`: loud, repeating, through Do Not Disturb (the default). `notify`: one ordinary notification. It comes from how the work was armed (`--notify`) |
 | `label` | The armed project folder's **name**: plain characters only, at most 40, never a path |
 | `agent` | `claude-code`, `codex` or `cli` |
 | `sent_at`, `expires_at` | Milliseconds since the epoch. Events live 30 minutes; a receiver must ignore an expired one |
@@ -41,20 +43,29 @@ The alarm skill runs `code-alarm arm` for you.
 | `code-alarm done` (run by the agent) | `done` | yes (not a nap) |
 | `code-alarm needs-you` (run by the agent) | `needs_input` | no |
 | `code-alarm failed` (run by the agent) | `failed` | yes |
-| Claude Code `Notification` with type `permission_prompt` | `needs_input`, at most once per 2 minutes | no |
-| Codex `PermissionRequest` (observed only, never decided) | `needs_input`, at most once per 2 minutes | no |
+| `PermissionRequest`, either agent (observed only, never decided) | `needs_input`, at most once per 2 minutes | no |
+| …for code-alarm's own `done`, `needs-you` or `failed` | that signal itself: the agent is waiting to send it | as that signal |
+| …for code-alarm's own `arm`, `status` and the like | none | no |
 | Claude Code `StopFailure` | `failed` | yes |
 | `Stop`, either agent, when no explicit signal came this turn | `stopped` | yes |
 | `UserPromptSubmit`, either agent | none; clears "already signalled this turn" | no |
 
 `Stop` fires after every turn, including when the agent stops to ask you something. That's why
 it's only the fallback: if the agent ran `done`, `needs-you` or `failed` during the turn, the
-`Stop` that follows sends nothing.
+`Stop` that follows sends nothing. The same signal twice in a turn is sent once.
+
+The installers pre-approve code-alarm's own commands, so an agent normally never has to ask:
+- Claude Code: the skill's `allowed-tools`.
+- Codex: `~/.codex/rules/code-alarm.rules`.
+
+When one still asks to run `code-alarm done`, that request counts as the signal. You get the
+right alert even when nobody is there to approve.
 
 ## Transports
 
-**ntfy** (now). The event becomes a JSON publish to the configured server root, at priority 5
-(`max`), with a title, a short message and an emoji tag
+**ntfy** (now). The event becomes a JSON publish to the configured server root, with a title, a
+short message and an emoji tag. The priority is 5 (`max`) for `alarm` and 3 (default) for
+`notify`. Only max-priority messages keep alerting
 ([format](https://docs.ntfy.sh/publish/#publish-as-json)). The ntfy topic and any access token
 live only in your config file.
 

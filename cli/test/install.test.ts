@@ -34,6 +34,11 @@ test("install keeps the user's own hooks, adds ours, and backs the file up", () 
   }
   assert.ok(readdirSync(join(f.userHome, ".codex")).some((name) => name.startsWith("hooks.json.code-alarm-backup-")));
   assert.ok(existsSync(f.paths.cli));
+  const rules = readFileSync(f.paths.rulesFile, "utf8");
+  assert.match(rules, /decision = "allow"/);
+  assert.match(rules, /\["arm", "disarm", "nap", "status", "done", "needs-you", "failed"\]/);
+  const pattern = rules.split("pattern =")[1]!.split("\n")[0]!;
+  assert.ok(!/"install"|"init"|"test"/.test(pattern), "install, init and test still ask");
   assert.match(readFileSync(join(f.paths.skillDir, "SKILL.md"), "utf8"), /^---\nname: code-alarm\n/);
   assert.ok(codexInstalled(f.alarmHome, f.userHome));
 });
@@ -54,6 +59,7 @@ test("uninstall removes only ours", () => {
   const file = JSON.parse(readFileSync(f.paths.hooksFile, "utf8"));
   assert.deepEqual(file, theirs);
   assert.ok(!existsSync(f.paths.skillDir));
+  assert.ok(!existsSync(f.paths.rulesFile));
   assert.ok(!codexInstalled(f.alarmHome, f.userHome));
 });
 

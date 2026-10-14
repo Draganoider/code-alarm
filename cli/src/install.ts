@@ -9,6 +9,7 @@ import { skillMarkdown } from "./skill.js";
  */
 export interface CodexPaths {
   hooksFile: string;
+  rulesFile: string;
   skillDir: string;
   cli: string;
 }
@@ -16,6 +17,7 @@ export interface CodexPaths {
 export function codexPaths(alarmHome: string, userHome: string): CodexPaths {
   return {
     hooksFile: join(userHome, ".codex", "hooks.json"),
+    rulesFile: join(userHome, ".codex", "rules", "code-alarm.rules"),
     skillDir: join(userHome, ".agents", "skills", "code-alarm"),
     // A fixed path: Codex trusts a hook by its exact command, so updating code-alarm must not change it.
     cli: join(alarmHome, "bin", "code-alarm.mjs"),
@@ -26,6 +28,26 @@ export const CODEX_EVENTS = ["Stop", "PermissionRequest", "UserPromptSubmit"] as
 
 export function codexCommand(cli: string): string {
   return `node "${cli.replace(/\\/g, "/")}" hook codex`;
+}
+
+/**
+ * A Codex rules file (https://developers.openai.com/codex/rules) that lets the agent run Code
+ * Alarm's own commands outside the sandbox without asking. Otherwise `done` would wait for an
+ * approval nobody is there to give. `install`, `init` and `test` still ask.
+ */
+export function codexRules(cli: string): string {
+  const path = cli.replace(/\\/g, "/");
+  return `# Written by \`code-alarm install codex\`; removed by \`code-alarm uninstall codex\`.
+# Lets Codex run Code Alarm's own commands without asking: they only change its arming state
+# and send an alarm.
+prefix_rule(
+    pattern = ["node", "${path}", ["arm", "disarm", "nap", "status", "done", "needs-you", "failed"]],
+    decision = "allow",
+    justification = "Code Alarm's own commands: arming state and alarms only.",
+    match = ['node "${path}" done', 'node "${path}" arm --notify'],
+    not_match = ['node "${path}" install codex'],
+)
+`;
 }
 
 interface HookHandler {
@@ -97,6 +119,9 @@ export function installCodex(args: { alarmHome: string; userHome: string; bundle
   writeFileAtomic(paths.hooksFile, JSON.stringify(withCodeAlarm(current, paths.cli), null, 2) + "\n");
   notes.push(`Added hooks for ${CODEX_EVENTS.join(", ")} to ${paths.hooksFile}`);
 
+  writeFileAtomic(paths.rulesFile, codexRules(paths.cli));
+  notes.push(`Allowed Code Alarm's own commands in ${paths.rulesFile}`);
+
   writeFileAtomic(join(paths.skillDir, "SKILL.md"), skillMarkdown(`node "${paths.cli.replace(/\\/g, "/")}"`, "code-alarm"));
   notes.push(`Installed the skill in ${paths.skillDir}`);
   return notes;
@@ -108,6 +133,10 @@ export function uninstallCodex(args: { alarmHome: string; userHome: string }): s
   if (existsSync(paths.hooksFile)) {
     writeFileAtomic(paths.hooksFile, JSON.stringify(withoutCodeAlarm(readHooksFile(paths.hooksFile)), null, 2) + "\n");
     notes.push(`Removed code-alarm's hooks from ${paths.hooksFile}`);
+  }
+  if (existsSync(paths.rulesFile)) {
+    rmSync(paths.rulesFile, { force: true });
+    notes.push(`Removed ${paths.rulesFile}`);
   }
   if (existsSync(paths.skillDir)) {
     rmSync(paths.skillDir, { recursive: true, force: true });

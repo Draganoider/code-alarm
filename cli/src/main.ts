@@ -20,12 +20,14 @@ const HELP = `code-alarm ${VERSION}: a real alarm on your phone when Claude Code
 Setup
   code-alarm init [--server URL] [--topic NAME] [--token TOKEN] [--force]
                                  Create a private ntfy topic and show how to subscribe on the phone
-  code-alarm test                Ring the phone now
+  code-alarm test [--notify]     Ring the phone now (or send a plain notification)
   code-alarm install codex       Add Code Alarm's hooks and skill to Codex (uninstall codex removes them)
 
 Arming (only armed work rings)
-  code-alarm arm [--for 12h]     Ring when the agent in this folder next finishes, stops or needs you
-  code-alarm nap <2h>            Ring for every session until the time is up
+  code-alarm arm [--for 12h] [--notify]
+                                 Ring when the agent in this folder next finishes, stops or needs you
+  code-alarm nap <2h> [--notify] Ring for every session until the time is up
+                                 --notify: one ordinary notification instead of the alarm
   code-alarm disarm [--all]      Cancel arming for this folder (or everything)
   code-alarm status              What's set up, what's armed, the last alerts
 
@@ -93,7 +95,7 @@ export async function main(argv: string[]): Promise<number> {
 
     case "__skill":
       // Used by cli/build.mjs to write the Claude Code plugin's SKILL.md from the same source.
-      process.stdout.write(skillMarkdown(rest[0] ?? "code-alarm", rest[1] ?? "alarm"));
+      process.stdout.write(skillMarkdown(rest[0] ?? "code-alarm", rest[1] ?? "alarm", rest[2]));
       return 0;
 
     case "init": {
@@ -133,18 +135,19 @@ Then connect your agent:
     }
 
     case "test": {
+      const { values } = parseArgs({ args: rest, options: { notify: { type: "boolean" } } });
       if (!loadConfig(home)) {
         console.log(setupHint());
         return 1;
       }
-      const event = buildEvent({ kind: "test", label: "test", agent: "cli", now: Date.now() });
+      const event = buildEvent({ kind: "test", level: values.notify ? "notify" : "alarm", label: "test", agent: "cli", now: Date.now() });
       const result = await sendNow(home, event);
       console.log(result.ok ? "Sent. Your phone should be ringing now." : `Couldn't send the test alarm: ${result.detail}.`);
       return result.ok ? 0 : 1;
     }
 
     case "arm": {
-      const { values } = parseArgs({ args: rest, options: { for: { type: "string" } } });
+      const { values } = parseArgs({ args: rest, options: { for: { type: "string" }, notify: { type: "boolean" } } });
       if (!loadConfig(home)) {
         console.log(setupHint());
         return 1;
@@ -152,24 +155,31 @@ Then connect your agent:
       const ms = values.for ? parseDuration(values.for) : DEFAULT_ARM_MS;
       if (!ms || ms > MAX_ARM_MS) throw new ConfigError(`--for takes a duration like 2h, 90m or 1h30m, at most 24h.`);
       const now = Date.now();
-      const arming = armProject(home, process.cwd(), now + ms, now);
+      const level = values.notify ? "notify" : "alarm";
+      const arming = armProject(home, process.cwd(), now + ms, now, level);
       console.log(
         `Armed "${labelFor(arming.dir ?? process.cwd())}" until ${clock(arming.until)} (${formatDuration(ms)}). ` +
-          "The phone rings the next time the agent here finishes, stops or needs you.",
+          (level === "notify"
+            ? "The phone gets one notification the next time the agent here finishes, stops or needs you."
+            : "The phone rings the next time the agent here finishes, stops or needs you."),
       );
       return 0;
     }
 
     case "nap": {
-      const ms = rest[0] ? parseDuration(rest[0]) : null;
+      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { notify: { type: "boolean" } } });
+      const ms = positionals[0] ? parseDuration(positionals[0]) : null;
       if (!ms || ms > MAX_ARM_MS) throw new ConfigError("Usage: code-alarm nap <duration>, like 2h or 45m (at most 24h).");
       if (!loadConfig(home)) {
         console.log(setupHint());
         return 1;
       }
       const now = Date.now();
-      armNap(home, now + ms, now);
-      console.log(`Nap mode until ${clock(now + ms)}: every session that finishes, stops or needs you rings the phone.`);
+      armNap(home, now + ms, now, values.notify ? "notify" : "alarm");
+      console.log(
+        `Nap mode until ${clock(now + ms)}: every session that finishes, stops or needs you ` +
+          (values.notify ? "sends a notification." : "rings the phone."),
+      );
       return 0;
     }
 
@@ -195,7 +205,8 @@ Then connect your agent:
       console.log(armings.length ? "Armed:" : "Nothing is armed.");
       for (const arming of armings) {
         const what = arming.kind === "nap" ? "nap mode, every session" : `${arming.dir}`;
-        console.log(`  - ${what} until ${clock(arming.until)} (${formatDuration(arming.until - now)} left)`);
+        const level = arming.level === "notify" ? ", notification only" : "";
+        console.log(`  - ${what} until ${clock(arming.until)} (${formatDuration(arming.until - now)} left${level})`);
       }
       console.log(`Codex hooks: ${codexInstalled(home, homedir()) ? "installed" : "not installed"}`);
       const log = recentLog(home, 5);
@@ -220,7 +231,8 @@ Then connect your agent:
         if (!script) throw new ConfigError("Can't tell where this code-alarm script is.");
         for (const note of installCodex({ alarmHome: home, userHome: homedir(), bundle: resolve(script), now: Date.now() })) console.log(note);
         console.log(
-          "\nNext: open Codex and approve (trust) the new hooks when it asks. Codex skips hooks until you do.\n" +
+          "\nNext: restart Codex (it reads rules at startup) and approve (trust) the new hooks when it asks.\n" +
+            "Codex skips hooks until you do.\n" +
             "Then, before a long task, ask Codex to use the code-alarm skill (or say \"wake me when it's done\").",
         );
       } else {

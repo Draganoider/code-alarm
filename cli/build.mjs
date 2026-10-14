@@ -30,7 +30,10 @@ copyFileSync(out, join(plugin, "bin", "code-alarm.mjs"));
 
 // The plugin's skill comes from the same source as the one `code-alarm install codex` writes. In
 // the plugin, `code-alarm` is on the PATH (the plugin's bin/), so the commands are bare.
-const skill = execFileSync(process.execPath, [out, "__skill", "code-alarm", "alarm"], { encoding: "utf8" });
+// allowed-tools pre-approves code-alarm's own commands for the turn that invokes the skill, so arming
+// and signalling never stop to ask (and never page the user to approve an alarm).
+const allowed = "Bash(code-alarm *) PowerShell(code-alarm *)";
+const skill = execFileSync(process.execPath, [out, "__skill", "code-alarm", "alarm", allowed], { encoding: "utf8" });
 mkdirSync(join(plugin, "skills", "alarm"), { recursive: true });
 writeFileSync(join(plugin, "skills", "alarm", "SKILL.md"), skill);
 

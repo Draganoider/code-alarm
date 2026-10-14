@@ -20,10 +20,17 @@ Docs: [hooks](https://code.claude.com/docs/en/hooks),
   `"${CLAUDE_PLUGIN_ROOT}"` so a path with spaces stays one word.
 - **Hook stdout matters:** a `UserPromptSubmit` hook's stdout is added to the prompt. Our hook
   never prints.
+- **Pre-approving our commands:**
+  - A skill's `allowed-tools` frontmatter lets Claude use the listed tools without asking, for the
+    turn that invokes the skill. Ours lists `Bash(code-alarm *) PowerShell(code-alarm *)`.
+  - Arguments after `/code-alarm:alarm` reach the skill (`$ARGUMENTS`, or appended as
+    `ARGUMENTS:`), which is how "quiet" selects a notification.
 - **Events we use:**
   - `Stop`: every turn. The payload has `session_id`, `prompt_id` and `cwd`.
   - `StopFailure`: the turn ended on an error.
-  - `Notification` with matcher `permission_prompt`.
+  - `PermissionRequest`: a permission dialog is about to show. Its `tool_input.command` tells us
+    when the waiting command is code-alarm's own. We use it instead of `Notification`
+    (`permission_prompt`), which doesn't say what's waiting.
   - `UserPromptSubmit`.
 - **Built-in phone push** (Remote Control) exists, but Claude decides when to send it, and it's an
   ordinary notification.
@@ -51,6 +58,9 @@ Docs: [hooks](https://learn.chatgpt.com/docs/hooks),
     that last one.
   - `PermissionRequest`: Codex is about to ask for approval. A hook that prints nothing leaves the
     normal prompt alone.
+    - The owner's first test showed why it matters: the model's `code-alarm done` needed approval,
+      because it writes outside the sandbox, and the hook rang "needs you" two seconds before "done".
+    - Fixed with a rules file and by recognising our own commands.
   - `UserPromptSubmit`.
   - There's no `Notification` event.
 - **Plugins:**
@@ -60,6 +70,11 @@ Docs: [hooks](https://learn.chatgpt.com/docs/hooks),
     **aren't eligible for OpenAI's public plugin directory**.
   - So Code Alarm installs into Codex with `code-alarm install codex` (user-level hooks and a
     personal skill) rather than as a plugin.
+- **Rules** ([docs](https://developers.openai.com/codex/rules)): Starlark `prefix_rule(...)` files
+  in `~/.codex/rules/`, read at startup. `decision = "allow"` lets a matching command run outside
+  the sandbox without asking; the strictest matching rule wins. Experimental.
+  `code-alarm install codex` writes `code-alarm.rules`, allowing only `arm`, `disarm`, `nap`,
+  `status`, `done`, `needs-you` and `failed`.
 - **Skills:** repositories use `.agents/skills`. For personal skills, both `~/.agents/skills` and
   `~/.codex/skills` are in use on the owner's machine. We install to `~/.agents/skills/code-alarm`.
-  Still to confirm with the desktop app: that it lists it.
+  The desktop app picked it up in the owner's first test (14 October 2026).

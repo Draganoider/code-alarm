@@ -16,8 +16,16 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
     detached process.
   - **Codex:** `install codex` and `uninstall codex`, for user-level hooks and a personal skill.
     Existing hooks are kept, and the file is backed up first.
-- The Claude Code plugin: `Stop`, `StopFailure`, `Notification` (permission prompts) and
-  `UserPromptSubmit` hooks, the `/code-alarm:alarm` skill, and `code-alarm` on the PATH.
+- The Claude Code plugin: `Stop`, `StopFailure`, `PermissionRequest` and `UserPromptSubmit` hooks,
+  the `/code-alarm:alarm` skill, and `code-alarm` on the PATH.
 - A Claude Code plugin marketplace at the repository root.
 - The event protocol, version 1 ([docs/protocol.md](docs/protocol.md)), with tests proving that
   nothing but its fields leaves the computer.
+- A `notify` level next to the alarm: `arm --notify`, `nap --notify`, `test --notify`, or "quiet"
+  in the skill. It sends one ordinary notification (ntfy priority 3) instead of the repeating
+  alarm. Events carry `level`.
+- code-alarm's own commands never need approval:
+  - the Claude Code skill pre-approves them (`allowed-tools`);
+  - `install codex` writes `~/.codex/rules/code-alarm.rules`.
+
+  If an agent still asks to run `code-alarm done`, that request counts as the signal.

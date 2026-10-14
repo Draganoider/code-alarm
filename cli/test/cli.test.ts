@@ -50,6 +50,9 @@ test("init, then arm, status and disarm", () => {
   assert.match(status, /Transport: ntfy, https:\/\/ntfy\.sh, topic code-alarm-tes…/);
   assert.match(status, /Armed:/);
   assert.match(run(["disarm"], "", home).stdout, /Disarmed this folder/);
+  assert.match(run(["arm", "--notify"], "", home).stdout, /one notification/);
+  assert.match(run(["status"], "", home).stdout, /notification only/);
+  run(["disarm"], "", home);
   assert.match(run(["status"], "", home).stdout, /Nothing is armed/);
 });
 

@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
 import { HOUR } from "../src/duration.js";
-import { NEEDS_INPUT_WINDOW_MS, runHook, runSignal } from "../src/hook.js";
+import { NEEDS_INPUT_WINDOW_MS, ownSubcommand, runHook, runSignal } from "../src/hook.js";
 import { armNap, armProject, findArming } from "../src/state.js";
 import { payload, setup } from "./helpers.js";
 
 test("an unarmed session never sends anything (DR-003)", async () => {
   const { project, sent, deps } = setup();
-  for (const event of ["Stop", "StopFailure", "Notification", "UserPromptSubmit"]) {
+  for (const event of ["Stop", "StopFailure", "PermissionRequest", "UserPromptSubmit"]) {
     await runHook("claude", payload(event, { cwd: project }), deps());
   }
   await runHook("codex", payload("PermissionRequest", { cwd: project }), deps());
@@ -73,20 +73,71 @@ test("a signal when nothing is armed sends nothing", async () => {
 test("permission prompts ring needs_input, at most once per window, without using up the arming", async () => {
   const { home, project, sent, clock, deps } = setup();
   armProject(home, project, clock.now + HOUR, clock.now);
-  await runHook("claude", payload("Notification", { cwd: project, notification_type: "permission_prompt" }), deps());
-  await runHook("claude", payload("Notification", { cwd: project, notification_type: "permission_prompt" }), deps());
+  const ask = (agent: "claude" | "codex") => runHook(agent, payload("PermissionRequest", { cwd: project, tool_input: { command: "rm -rf build" } }), deps());
+  await ask("claude");
+  await ask("claude");
   assert.deepEqual(sent.map((e) => e.kind), ["needs_input"]);
   clock.now += NEEDS_INPUT_WINDOW_MS + 1;
-  await runHook("codex", payload("PermissionRequest", { cwd: project }), deps());
+  await ask("codex");
   assert.deepEqual(sent.map((e) => e.kind), ["needs_input", "needs_input"]);
   assert.ok(findArming(home, project, clock.now), "still armed");
 });
 
-test("other notification types (idle, auth...) ring nothing", async () => {
+test("Notification events ring nothing (permission prompts come from PermissionRequest)", async () => {
   const { home, project, sent, clock, deps } = setup();
   armProject(home, project, clock.now + HOUR, clock.now);
-  await runHook("claude", payload("Notification", { cwd: project, notification_type: "idle_prompt" }), deps());
+  for (const type of ["permission_prompt", "idle_prompt"]) {
+    await runHook("claude", payload("Notification", { cwd: project, notification_type: type }), deps());
+  }
   assert.equal(sent.length, 0);
+});
+
+test("approving code-alarm's own done IS the done signal; the command itself then adds nothing", async () => {
+  const { home, project, sent, clock, deps } = setup();
+  armProject(home, project, clock.now + HOUR, clock.now);
+  const cli = 'node "C:/Users/me/AppData/Roaming/code-alarm/bin/code-alarm.mjs"';
+  await runHook("codex", payload("PermissionRequest", { cwd: project, tool_input: { command: `${cli} done` } }), deps());
+  assert.deepEqual(sent.map((e) => e.kind), ["done"], "done, not needs_input");
+  const later = await runSignal("done", "codex", deps());
+  assert.equal(later.sent, false);
+  await runHook("codex", payload("Stop", { cwd: project }), deps());
+  assert.equal(sent.length, 1);
+});
+
+test("approving code-alarm's own arm or status rings nothing", async () => {
+  const { home, project, sent, clock, deps } = setup();
+  armProject(home, project, clock.now + HOUR, clock.now);
+  for (const command of ["code-alarm arm --notify", "code-alarm status", "cd x && code-alarm disarm"]) {
+    await runHook("claude", payload("PermissionRequest", { cwd: project, tool_input: { command } }), deps());
+  }
+  assert.equal(sent.length, 0);
+});
+
+test("needs-you twice in a turn rings once", async () => {
+  const { home, project, sent, clock, deps } = setup();
+  armProject(home, project, clock.now + HOUR, clock.now);
+  await runSignal("needs_input", "claude-code", deps());
+  const again = await runSignal("needs_input", "claude-code", deps());
+  assert.equal(again.sent, false);
+  assert.equal(sent.length, 1);
+});
+
+test("a notify arming sends notify-level events", async () => {
+  const { home, project, sent, clock, deps } = setup();
+  armProject(home, project, clock.now + HOUR, clock.now, "notify");
+  await runHook("claude", payload("Stop", { cwd: project }), deps());
+  assert.deepEqual(sent.map((e) => [e.kind, e.level]), [["stopped", "notify"]]);
+});
+
+test("recognising code-alarm's own commands", () => {
+  assert.equal(ownSubcommand("code-alarm done"), "done");
+  assert.equal(ownSubcommand('node "C:/Users/a b/AppData/Roaming/code-alarm/bin/code-alarm.mjs" needs-you'), "needs-you");
+  assert.equal(ownSubcommand("C:\\x\\code-alarm.cmd failed"), "failed");
+  assert.equal(ownSubcommand("cd /work && code-alarm arm --for 2h"), "arm");
+  assert.equal(ownSubcommand("npm install code-alarm"), null);
+  assert.equal(ownSubcommand("rm -rf /code-alarm/done"), null);
+  assert.equal(ownSubcommand("my-code-alarm done"), null);
+  assert.equal(ownSubcommand(undefined), null);
 });
 
 test("StopFailure rings failed", async () => {

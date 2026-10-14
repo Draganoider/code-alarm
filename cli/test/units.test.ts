@@ -46,6 +46,15 @@ test("the ntfy request: JSON to the server root, max priority, token only as a h
   assert.ok(!init.body.includes("secret-token"));
 });
 
+test("notify level is ntfy's default priority; alarm is max", () => {
+  const cfg = { server: "https://ntfy.sh", topic: "t" };
+  const priority = (level: "alarm" | "notify") =>
+    (JSON.parse(ntfyRequest(buildEvent({ kind: "done", level, label: "a", agent: "cli", now: 0 }), cfg).init.body) as { priority: number }).priority;
+  assert.equal(priority("alarm"), 5);
+  assert.equal(priority("notify"), 3);
+  assert.equal(buildEvent({ kind: "done", label: "a", agent: "cli", now: 0 }).level, "alarm");
+});
+
 test("sendNtfy reports failures instead of throwing", async () => {
   const event = buildEvent({ kind: "done", label: "a", agent: "cli", now: 0 });
   const cfg = { server: "https://ntfy.example", topic: "t" };

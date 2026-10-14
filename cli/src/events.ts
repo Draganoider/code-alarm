@@ -8,15 +8,19 @@ export interface AlarmEvent {
   v: 1;
   id: string;
   kind: Kind;
+  /** "alarm": loud, repeating, through Do Not Disturb. "notify": one ordinary notification. */
+  level: Level;
   label: string;
   agent: Agent;
   sent_at: number;
   expires_at: number;
 }
 
-export const EVENT_FIELDS = ["v", "id", "kind", "label", "agent", "sent_at", "expires_at"] as const;
+export const EVENT_FIELDS = ["v", "id", "kind", "level", "label", "agent", "sent_at", "expires_at"] as const;
 export const KINDS = ["done", "needs_input", "failed", "stopped", "test"] as const;
 export type Kind = (typeof KINDS)[number];
+export const LEVELS = ["alarm", "notify"] as const;
+export type Level = (typeof LEVELS)[number];
 export type Agent = "claude-code" | "codex" | "cli";
 
 export const DEFAULT_TTL_MS = 30 * 60_000;
@@ -46,6 +50,7 @@ export function eventId(parts?: readonly (string | undefined)[]): string {
 
 export function buildEvent(args: {
   kind: Kind;
+  level?: Level;
   label: string;
   agent: Agent;
   now: number;
@@ -56,6 +61,7 @@ export function buildEvent(args: {
     v: 1,
     id: eventId(args.idParts),
     kind: args.kind,
+    level: args.level ?? "alarm",
     label: args.label.slice(0, MAX_LABEL),
     agent: args.agent,
     sent_at: args.now,
