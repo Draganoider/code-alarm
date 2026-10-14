@@ -1,0 +1,14 @@
+# Same line endings for everyone. Windows batch shims need CRLF; the POSIX shim must stay LF.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+plugins/claude-code/bin/code-alarm text eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
+
+# Generated: reviewers skip them in diffs.
+package-lock.json linguist-generated=true -diff
+cli/dist/** linguist-generated=true -diff
+plugins/*/bin/*.mjs linguist-generated=true -diff
