@@ -75,6 +75,11 @@ Docs: [hooks](https://learn.chatgpt.com/docs/hooks),
   the sandbox without asking; the strictest matching rule wins. Experimental.
   `code-alarm install codex` writes `code-alarm.rules`, allowing only `arm`, `disarm`, `nap`,
   `status`, `done`, `needs-you` and `failed`.
+  - **Unconfirmed:** in the owner's first test after installing it (Windows desktop app, 14 Oct
+    2026), Codex still asked approval for `done`. It may not have been fully restarted, or a shell
+    wrapper may keep the rule from matching.
+  - The `PermissionRequest` fallback sent the right `done` anyway, so the alarm doesn't depend on
+    the rule.
 - **Skills:** repositories use `.agents/skills`. For personal skills, both `~/.agents/skills` and
   `~/.codex/skills` are in use on the owner's machine. We install to `~/.agents/skills/code-alarm`.
   The desktop app picked it up in the owner's first test (14 October 2026).
