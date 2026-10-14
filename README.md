@@ -80,7 +80,8 @@ Before a long task, arm it:
 | Any terminal | `code-alarm arm` in the project folder; `code-alarm nap 2h` arms every session for 2 hours |
 
 **Prefer a plain notification?** Say *quiet*: `/code-alarm:alarm quiet …`, "quietly notify me
-when done", or `code-alarm arm --notify`. You get one ordinary notification instead of the alarm.
+when done", or `code-alarm arm --notify`. You get one normal notification, which pops up with sound
+and vibration and follows your phone's sound settings, instead of the repeating alarm.
 
 The agent ends its work with `done`, `needs-you` or `failed`, and your phone rings with that
 reason. If it forgets, the alarm still rings when it stops, labelled *stopped*.

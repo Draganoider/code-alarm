@@ -32,9 +32,10 @@ export function ntfyRequest(event: AlarmEvent, config: NtfyConfig): NtfyRequest 
         topic: config.topic,
         title: event.kind === "test" ? text.title : `${text.title}: ${event.label}`,
         message: text.message(agentName(event.agent)),
-        // 5 is ntfy's "max" priority: the one the app keeps ringing, through Do Not Disturb if the
-        // subscription allows it. 3 is its default: one ordinary notification.
-        priority: event.level === "notify" ? 3 : 5,
+        // 5 ("max") is the alarm: the ntfy app keeps alerting until dismissed, through Do Not
+        // Disturb if the subscription allows it. 4 ("high") is a normal notification that pops up
+        // with sound and vibration, once. 3 ("default") often arrives silently, without a pop-up.
+        priority: event.level === "notify" ? 4 : 5,
         tags: text.tags,
       }),
     },

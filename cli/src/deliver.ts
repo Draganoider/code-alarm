@@ -36,7 +36,7 @@ export async function sendNow(home: string, event: AlarmEvent, fetchImpl?: typeo
   const config = loadConfig(home);
   if (!config) return { ok: false, detail: "not set up: run `code-alarm init`" };
   const result = await sendNtfy(event, config.ntfy, fetchImpl);
-  logLine(home, `${event.kind} ${event.agent} "${event.label}" ${result.ok ? "sent" : "FAILED"} (${result.detail})`);
+  logLine(home, `${event.kind}/${event.level} ${event.agent} "${event.label}" ${result.ok ? "sent" : "FAILED"} (${result.detail})`);
   return result;
 }
 

@@ -115,9 +115,10 @@ function ntfyRequest(event, config) {
         topic: config.topic,
         title: event.kind === "test" ? text.title : `${text.title}: ${event.label}`,
         message: text.message(agentName(event.agent)),
-        // 5 is ntfy's "max" priority: the one the app keeps ringing, through Do Not Disturb if the
-        // subscription allows it. 3 is its default: one ordinary notification.
-        priority: event.level === "notify" ? 3 : 5,
+        // 5 ("max") is the alarm: the ntfy app keeps alerting until dismissed, through Do Not
+        // Disturb if the subscription allows it. 4 ("high") is a normal notification that pops up
+        // with sound and vibration, once. 3 ("default") often arrives silently, without a pop-up.
+        priority: event.level === "notify" ? 4 : 5,
         tags: text.tags
       })
     }
@@ -159,7 +160,7 @@ async function sendNow(home, event, fetchImpl) {
   const config = loadConfig(home);
   if (!config) return { ok: false, detail: "not set up: run `code-alarm init`" };
   const result = await sendNtfy(event, config.ntfy, fetchImpl);
-  logLine(home, `${event.kind} ${event.agent} "${event.label}" ${result.ok ? "sent" : "FAILED"} (${result.detail})`);
+  logLine(home, `${event.kind}/${event.level} ${event.agent} "${event.label}" ${result.ok ? "sent" : "FAILED"} (${result.detail})`);
   return result;
 }
 function sendDetached(event, script = process.argv[1]) {

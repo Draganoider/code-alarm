@@ -24,7 +24,7 @@ computer: no prompts, code, file paths, transcripts or assistant messages. A tes
 | `v` | Protocol version, `1` |
 | `id` | Hook events: derived from the agent, session, turn and kind, so a hook that fires twice for the same turn produces the same ID. Explicit signals: random |
 | `kind` | `done`, `needs_input`, `failed`, `stopped` or `test` |
-| `level` | `alarm`: loud, repeating, through Do Not Disturb (the default). `notify`: one ordinary notification. It comes from how the work was armed (`--notify`) |
+| `level` | `alarm`: loud, repeating, through Do Not Disturb (the default). `notify`: one normal notification that pops up with sound and vibration, following the phone's sound settings. It comes from how the work was armed (`--notify`) |
 | `label` | The armed project folder's **name**: plain characters only, at most 40, never a path |
 | `agent` | `claude-code`, `codex` or `cli` |
 | `sent_at`, `expires_at` | Milliseconds since the epoch. Events live 30 minutes; a receiver must ignore an expired one |
@@ -64,8 +64,9 @@ right alert even when nobody is there to approve.
 ## Transports
 
 **ntfy** (now). The event becomes a JSON publish to the configured server root, with a title, a
-short message and an emoji tag. The priority is 5 (`max`) for `alarm` and 3 (default) for
-`notify`. Only max-priority messages keep alerting
+short message and an emoji tag. The priority is 5 (`max`) for `alarm`, which the ntfy app
+keeps alerting until dismissed, and 4 (`high`) for `notify`, which pops up once with sound and
+vibration
 ([format](https://docs.ntfy.sh/publish/#publish-as-json)). The ntfy topic and any access token
 live only in your config file.
 

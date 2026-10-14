@@ -22,8 +22,8 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
 - The event protocol, version 1 ([docs/protocol.md](docs/protocol.md)), with tests proving that
   nothing but its fields leaves the computer.
 - A `notify` level next to the alarm: `arm --notify`, `nap --notify`, `test --notify`, or "quiet"
-  in the skill. It sends one ordinary notification (ntfy priority 3) instead of the repeating
-  alarm. Events carry `level`.
+  in the skill. It sends one normal notification that pops up with sound and vibration (ntfy
+  priority 4) instead of the repeating alarm. Events carry `level`.
 - code-alarm's own commands never need approval:
   - the Claude Code skill pre-approves them (`allowed-tools`);
   - `install codex` writes `~/.codex/rules/code-alarm.rules`.
