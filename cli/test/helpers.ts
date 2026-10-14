@@ -17,9 +17,16 @@ export function setup(now = 1_760_400_000_000) {
   mkdirSync(join(project, "src"), { recursive: true });
   saveConfig(home, { version: 1, transport: "ntfy", ntfy: { server: "https://ntfy.example", topic: "code-alarm-testtopic" } });
   const sent: AlarmEvent[] = [];
+  const waiters: { id: string; at: number }[] = [];
   const clock = { now };
-  const deps = (cwd: string = project): Deps => ({ home, now: () => clock.now, send: (event) => void sent.push(event), cwd: () => cwd });
-  return { root, home, project, sent, clock, deps };
+  const deps = (cwd: string = project): Deps => ({
+    home,
+    now: () => clock.now,
+    send: (event) => void sent.push(event),
+    wait: (id, at) => void waiters.push({ id, at }),
+    cwd: () => cwd,
+  });
+  return { root, home, project, sent, waiters, clock, deps };
 }
 
 /** A hook payload the way the agents send it, including fields that must never leave the computer. */

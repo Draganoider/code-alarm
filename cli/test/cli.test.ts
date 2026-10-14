@@ -29,6 +29,14 @@ test("hooks print nothing and exit 0, whatever they're given", () => {
   }
 });
 
+test("the approval waiter ignores bad arguments, silently and at once", () => {
+  for (const args of [[], ["../../etc", "1"], ["session-ab-cd", "soon"]]) {
+    const result = run(["__wait", ...args]);
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, "");
+  }
+});
+
 test("signals without arming say so and exit 0", () => {
   const result = run(["done"]);
   assert.equal(result.status, 0);

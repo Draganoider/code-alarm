@@ -43,12 +43,26 @@ The alarm skill runs `code-alarm arm` for you.
 | `code-alarm done` (run by the agent) | `done` | yes (not a nap) |
 | `code-alarm needs-you` (run by the agent) | `needs_input` | no |
 | `code-alarm failed` (run by the agent) | `failed` | yes |
-| `PermissionRequest`, either agent (observed only, never decided) | `needs_input`, at most once per 2 minutes | no |
-| …for code-alarm's own `done`, `needs-you` or `failed` | that signal itself: the agent is waiting to send it | as that signal |
-| …for code-alarm's own `arm`, `status` and the like | none | no |
+| Claude Code `PermissionRequest` (observed only, never decided) | `needs_input` at once, at most once per 2 minutes | no |
+| Codex `PermissionRequest` (observed only, never decided) | `needs_input` after 45 s if the request is still unanswered, within the same limit | no |
+| …either agent, for code-alarm's own `done`, `needs-you` or `failed` | that signal itself, at once: the agent is waiting to send it | as that signal |
+| …either agent, for code-alarm's own `arm`, `status` and the like | none | no |
+| Codex `PostToolUse` | none; the tool ran, so its approval request was answered | no |
 | Claude Code `StopFailure` | `failed` | yes |
 | `Stop`, either agent, when no explicit signal came this turn | `stopped` | yes |
 | `UserPromptSubmit`, either agent | none; clears "already signalled this turn" | no |
+
+**Why Codex waits.** Codex runs its `PermissionRequest` hooks before it decides who answers. With
+auto-review on, a model answers most requests in a second or two, and nobody is needed. A command
+already approved for the session is answered at once too. The hook can't tell these from a request
+that waits for you. So it records the request locally: hashes of the session and the command, never
+the command itself. A detached waiter checks again 45 s later, and sends `needs_input` only if
+nothing has answered the request:
+- the command's `PostToolUse` (it ran) removes it;
+- so do the session's `Stop`, `StopFailure` or `UserPromptSubmit` (the turn ended, or you're there).
+
+What it can't see, so these still ring after 45 s: an approved command that runs for longer than
+that, and a request that was denied while the agent went on working.
 
 `Stop` fires after every turn, including when the agent stops to ask you something. That's why
 it's only the fallback: if the agent ran `done`, `needs-you` or `failed` during the turn, the

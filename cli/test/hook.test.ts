@@ -3,19 +3,20 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { HOUR } from "../src/duration.js";
-import { NEEDS_INPUT_WINDOW_MS, ownCommand, runHook, runSignal, sessionFromEnv } from "../src/hook.js";
-import { armNap, armProject, claim, findArming } from "../src/state.js";
+import { NEEDS_INPUT_WINDOW_MS, PENDING_WAIT_MS, firePending, ownCommand, runHook, runSignal, sessionFromEnv } from "../src/hook.js";
+import { armNap, armProject, claim, disarmProject, findArming } from "../src/state.js";
 import { payload, setup } from "./helpers.js";
 
 const own = (command?: string) => ownCommand(command, process.cwd())?.sub ?? null;
 
 test("an unarmed session never sends anything (DR-003)", async () => {
-  const { project, sent, deps } = setup();
+  const { project, sent, waiters, deps } = setup();
   for (const event of ["Stop", "StopFailure", "PermissionRequest", "UserPromptSubmit"]) {
     await runHook("claude", payload(event, { cwd: project }), deps());
   }
-  await runHook("codex", payload("PermissionRequest", { cwd: project }), deps());
+  await runHook("codex", payload("PermissionRequest", { cwd: project, tool_input: { command: "rm -rf build" } }), deps());
   assert.equal(sent.length, 0);
+  assert.equal(waiters.length, 0, "nothing to wait for either");
 });
 
 test("Stop in an armed project sends 'stopped' once, then the arming is used up", async () => {
@@ -73,17 +74,134 @@ test("a signal when nothing is armed sends nothing", async () => {
   assert.equal(sent.length, 0);
 });
 
-test("permission prompts ring needs_input, at most once per window, without using up the arming", async () => {
-  const { home, project, sent, clock, deps } = setup();
+test("Claude Code permission prompts ring needs_input at once, at most once per window, without using up the arming", async () => {
+  const { home, project, sent, waiters, clock, deps } = setup();
   armProject(home, project, clock.now + HOUR, clock.now);
-  const ask = (agent: "claude" | "codex") => runHook(agent, payload("PermissionRequest", { cwd: project, tool_input: { command: "rm -rf build" } }), deps());
-  await ask("claude");
-  await ask("claude");
+  const ask = () => runHook("claude", payload("PermissionRequest", { cwd: project, tool_input: { command: "rm -rf build" } }), deps());
+  await ask();
+  await ask();
   assert.deepEqual(sent.map((e) => e.kind), ["needs_input"]);
   clock.now += NEEDS_INPUT_WINDOW_MS + 1;
-  await ask("codex");
+  await ask();
   assert.deepEqual(sent.map((e) => e.kind), ["needs_input", "needs_input"]);
+  assert.equal(waiters.length, 0, "Claude Code asks the user when it fires, so there's nothing to wait for");
   assert.ok(findArming(home, project, clock.now), "still armed");
+});
+
+/** A Codex session asking to run `command`, then what the waiter does PENDING_WAIT_MS later. */
+function codexSession(s: ReturnType<typeof setup>, session = "codex-1") {
+  const request = (command: string, extra: Record<string, unknown> = {}) =>
+    runHook("codex", payload("PermissionRequest", { cwd: s.project, session_id: session, turn_id: "t1", tool_input: { command, ...extra } }), s.deps());
+  const ran = (command: string) =>
+    runHook("codex", payload("PostToolUse", { cwd: s.project, session_id: session, turn_id: "t1", tool_input: { command }, tool_response: "ok" }), s.deps());
+  const fire = async (waiter = s.waiters.at(-1)!) => {
+    s.clock.now = Math.max(s.clock.now, waiter.at + PENDING_WAIT_MS);
+    return firePending(waiter.id, waiter.at, s.deps());
+  };
+  return { request, ran, fire };
+}
+
+test("Codex: a request auto-review approved (the tool ran) rings nothing", async () => {
+  const s = setup();
+  armProject(s.home, s.project, s.clock.now + HOUR, s.clock.now);
+  const codex = codexSession(s);
+  // The request carries the reason for the escalation; the tool run carries only the command.
+  await codex.request("npm install", { description: "network access to install dependencies" });
+  assert.equal(s.sent.length, 0, "nothing at once");
+  assert.equal(s.waiters.length, 1);
+  s.clock.now += 1500;
+  assert.match(await codex.ran("npm install"), /answered/);
+  assert.equal(await codex.fire(), "");
+  assert.equal(s.sent.length, 0);
+  assert.ok(findArming(s.home, s.project, s.clock.now), "still armed");
+});
+
+test("Codex: a request still unanswered after the wait rings needs_input once", async () => {
+  const s = setup();
+  armProject(s.home, s.project, s.clock.now + HOUR, s.clock.now);
+  const codex = codexSession(s);
+  await codex.request("git push");
+  assert.match(await codex.fire(), /needs_input queued/);
+  assert.deepEqual(s.sent.map((e) => [e.kind, e.agent]), [["needs_input", "codex"]]);
+  assert.equal(await codex.fire(), "", "the same waiter twice sends once");
+  // The user approves later and the tool runs: that's not another alert.
+  await codex.ran("git push");
+  assert.equal(s.sent.length, 1);
+  assert.ok(findArming(s.home, s.project, s.clock.now), "needs_input doesn't use up the arming");
+});
+
+test("Codex: another command's run, or another session's, doesn't answer a request", async () => {
+  const s = setup();
+  armProject(s.home, s.project, s.clock.now + HOUR, s.clock.now);
+  const codex = codexSession(s);
+  await codex.request("git push");
+  await codex.ran("npm test"); // a parallel call finishing while the request waits
+  await codexSession(s, "codex-2").ran("git push");
+  await codex.fire();
+  assert.deepEqual(s.sent.map((e) => e.kind), ["needs_input"]);
+});
+
+test("Codex: the turn ending, or a new prompt, ends the wait", async () => {
+  for (const event of ["Stop", "UserPromptSubmit"]) {
+    const s = setup();
+    armNap(s.home, s.clock.now + HOUR, s.clock.now);
+    const codex = codexSession(s);
+    await codex.request("git push");
+    await runHook("codex", payload(event, { cwd: s.project, session_id: "codex-1", turn_id: "t1" }), s.deps());
+    await codex.fire();
+    assert.ok(!s.sent.some((e) => e.kind === "needs_input"), event);
+  }
+});
+
+test("Codex: a request asked again waits afresh; only the newest waiter decides", async () => {
+  const s = setup();
+  armProject(s.home, s.project, s.clock.now + HOUR, s.clock.now);
+  const codex = codexSession(s);
+  await codex.request("git push");
+  s.clock.now += 10_000;
+  await codex.request("git push");
+  const [first, second] = s.waiters;
+  assert.equal(await codex.fire(first), "", "the first waiter leaves it to the second");
+  assert.equal(s.sent.length, 0);
+  await codex.fire(second);
+  assert.deepEqual(s.sent.map((e) => e.kind), ["needs_input"]);
+});
+
+test("Codex: unanswered requests share Claude Code's limit of one needs_input per window", async () => {
+  const s = setup();
+  armProject(s.home, s.project, s.clock.now + HOUR, s.clock.now);
+  const codex = codexSession(s);
+  await codex.request("git push");
+  await codex.request("git push --tags");
+  for (const waiter of [...s.waiters]) await codex.fire(waiter);
+  assert.deepEqual(s.sent.map((e) => e.kind), ["needs_input"]);
+});
+
+test("Codex: disarmed while the request waits, nothing is sent", async () => {
+  const s = setup();
+  armProject(s.home, s.project, s.clock.now + HOUR, s.clock.now);
+  const codex = codexSession(s);
+  await codex.request("git push");
+  disarmProject(s.home, s.project);
+  await codex.fire();
+  assert.equal(s.sent.length, 0);
+});
+
+test("Codex: if the request can't be recorded, needs_input is sent at once", async () => {
+  const s = setup();
+  armProject(s.home, s.project, s.clock.now + HOUR, s.clock.now);
+  writeFileSync(join(s.home, "pending"), "a file where the folder should be");
+  await codexSession(s).request("git push");
+  assert.deepEqual(s.sent.map((e) => e.kind), ["needs_input"]);
+  assert.equal(s.waiters.length, 0);
+});
+
+test("a tool run with no request waiting logs nothing, and Claude Code's PostToolUse does nothing", async () => {
+  const s = setup();
+  armProject(s.home, s.project, s.clock.now + HOUR, s.clock.now);
+  assert.equal(await codexSession(s).ran("ls"), "");
+  assert.equal(await runHook("claude", payload("PostToolUse", { cwd: s.project, tool_input: { command: "ls" } }), s.deps()), "");
+  assert.equal(s.sent.length, 0);
 });
 
 test("Notification events ring nothing (permission prompts come from PermissionRequest)", async () => {
@@ -193,11 +311,16 @@ test("an approved `cd B && code-alarm done` signals B, not the folder the agent 
 });
 
 test("approving a command that only mentions code-alarm is a normal needs_input", async () => {
-  const { home, project, sent, clock, deps } = setup();
+  const { home, project, sent, waiters, clock, deps } = setup();
   armProject(home, project, clock.now + HOUR, clock.now);
   const command = `git commit -m "code-alarm done: tidy up"`;
-  await runHook("codex", payload("PermissionRequest", { cwd: project, tool_input: { command } }), deps());
+  await runHook("claude", payload("PermissionRequest", { cwd: project, tool_input: { command } }), deps());
   assert.deepEqual(sent.map((e) => e.kind), ["needs_input"]);
+  // In Codex too, once the request has gone unanswered.
+  await runHook("codex", payload("PermissionRequest", { cwd: project, session_id: "codex-1", tool_input: { command } }), deps());
+  clock.now += NEEDS_INPUT_WINDOW_MS + 1;
+  await firePending(waiters[0]!.id, waiters[0]!.at, deps());
+  assert.deepEqual(sent.map((e) => [e.kind, e.agent]), [["needs_input", "claude-code"], ["needs_input", "codex"]]);
   assert.ok(findArming(home, project, clock.now), "still armed");
 });
 

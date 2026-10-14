@@ -30,6 +30,11 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
 
   If an agent still asks to run `code-alarm done`, that request counts as the signal. Only a
   command that runs code-alarm itself counts, not text that mentions it.
+- Codex approval requests ring "needs you" only if nobody answers them within 45 s. Codex's
+  auto-review approves most requests in a second or two, so ringing at once woke you for nothing.
+  `install codex` adds an async `PostToolUse` hook: when the command runs, its request was
+  answered. The turn ending or a new prompt also clears it. The request is kept locally as hashes,
+  never the command. Claude Code still rings at once.
 - "Signalled this turn" is kept per agent session, and a project arming is claimed before its
   alert is sent: one session never silences another's alert, and two racing hooks send one alert.
 - `install codex` backs up a rules file or skill it didn't write, and refuses a folder it can't

@@ -54,7 +54,11 @@ Docs: [hooks](https://learn.chatgpt.com/docs/hooks),
     hook's exact command, so a changed command is skipped until it's trusted again. That's why
     `code-alarm install codex` points the hooks at a fixed copy of the CLI, which updates in place.
   - `async: true` runs a hook in the background, so it can't block or decide anything. We use it
-    for all three hooks.
+    for all four hooks.
+  - A hook that exits normally may leave detached helpers running: on Windows, Codex runs each hook
+    in a job object and lets the job's other processes go on when the hook completes
+    (`hooks/src/engine/command_runner.rs`, checked 14 Oct 2026). That's how the hook's detached
+    sender and approval waiter outlive it.
 - **Events we use:**
   - `Stop`: the payload has `session_id`, `turn_id`, `cwd` and `last_assistant_message`. We ignore
     that last one. Commands get the session as `CODEX_THREAD_ID` (and `CODEX_SESSION_ID`, the
@@ -65,13 +69,37 @@ Docs: [hooks](https://learn.chatgpt.com/docs/hooks),
     - The owner's first test showed why it matters: the model's `code-alarm done` needed approval,
       because it writes outside the sandbox, and the hook rang "needs you" two seconds before "done".
     - Fixed with a rules file and by recognising our own commands.
-    - **It also fires when Codex's auto-review handles the request** (the desktop app's setting;
-      the thread shows `approvals_reviewer: "auto_review"`): a "guardian" model approves or declines it, often
-      in a second or two, and the user isn't asked. Seen in the owner's logs, 14 Oct 2026: the hook
-      fired 0.2 s before the guardian allowed `done`. The payload doesn't say which reviewer will
-      answer, so an auto-reviewed escalation looks like one waiting for the user.
+    - **It fires before Codex decides who answers.** The order is: hooks, then the auto-review
+      "guardian" if it's on, otherwise the user (`core/src/tools/approvals.rs`, checked 14 Oct
+      2026). With auto-review on (the desktop app's setting; the thread shows
+      `approvals_reviewer: "auto_review"`), the guardian approves or declines, often in a second
+      or two, and the user isn't asked. Seen in the owner's logs, 14 Oct 2026: the hook fired
+      0.2 s before the guardian allowed `done`.
+    - **It also fires for a command the user already approved for the session.** That cache is
+      checked after the hooks, so the request is answered at once.
+    - **The payload can't tell these apart.** It has `turn_id`, `tool_name`, `tool_input`
+      (`command`, and `description`, the reason for the request, when there is one) and
+      `permission_mode`, but no reviewer and no `tool_use_id`. `permission_mode` comes from the
+      approval policy alone (`default` for on-request, `bypassPermissions` for never), so
+      auto-review doesn't change it.
+    - So for Codex we don't ring at once: the request waits 45 s, and rings only if its tool
+      hasn't run and the turn hasn't ended by then (docs/protocol.md). In the owner's logs, 53 of
+      220 tool calls were escalated, and every one had finished within 28 s.
+  - `PostToolUse`: after a tool call **finishes**, with `turn_id`, `tool_name`, `tool_use_id`,
+    `tool_input` and `tool_response`. It fires for shell commands (as `Bash`, including ones that
+    exit non-zero) and for `apply_patch`, but not for a call that was denied. The docs and the
+    source say so for every platform; it hasn't been seen in a run on the owner's machine yet.
+    - For a shell command or a patch, `tool_input.command` is the same string the
+      `PermissionRequest` had. That's how we pair the two.
+    - A long command that yields keeps running, and its `PostToolUse` comes from the later
+      `write_stdin` poll that sees it finish. So an approved command that runs longer than the
+      wait still rings.
+    - It runs after every tool call, so our hook does almost nothing then: it only removes a
+      matching pending request.
   - `UserPromptSubmit`.
   - There's no `Notification` event.
+  - A hook added later must be trusted before it runs, like the first ones. Until the user trusts
+    `PostToolUse`, every approval request rings after the wait: later, but never lost.
 - **Plugins:**
   - The manifest is `plugin.json` at the plugin root (`.codex-plugin/plugin.json` still works).
     Hooks live in `hooks/hooks.json` and use `${PLUGIN_ROOT}`.

@@ -1,11 +1,28 @@
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { type Agent, type AlarmEvent, type Kind, buildEvent, labelFor } from "./events.js";
-import { claim, claimEvent, clearSignaled, findArming, isSignaled, markSignaled, rateLimited, signalKey, signaledKind } from "./state.js";
+import {
+  claim,
+  claimEvent,
+  clearPending,
+  clearSessionPending,
+  clearSignaled,
+  findArming,
+  isSignaled,
+  markSignaled,
+  pendingId,
+  rateLimited,
+  recordPending,
+  signalKey,
+  signaledKind,
+  takePending,
+} from "./state.js";
 
 /**
  * The fields we read from an agent's hook payload. Everything else in it (prompts, transcripts,
- * assistant messages) is ignored. `command` is read only to recognise code-alarm's own commands
- * locally: it is never sent anywhere.
+ * assistant messages, tool output) is ignored. `command` is read only to recognise code-alarm's own
+ * commands, and `requestHash` (a hash of the tool's input) only to pair a Codex approval request
+ * with the tool run that answers it. Neither is ever sent; only the hash is kept, locally.
  */
 export interface HookInput {
   event: string;
@@ -14,24 +31,43 @@ export interface HookInput {
   turnId?: string;
   promptId?: string;
   command?: string;
+  requestHash?: string;
 }
 
 export type HookAgent = "claude" | "codex";
 export type SignalKind = "done" | "needs_input" | "failed";
 
+type SendAction = { type: "send"; kind: Kind; fallback: boolean; consume: boolean; rateLimitMs?: number };
+
 export type Action =
-  | { type: "send"; kind: Kind; fallback: boolean; consume: boolean; rateLimitMs?: number }
+  | SendAction
   | { type: "signal"; kind: SignalKind; cwd: string }
+  | { type: "await-answer" }
+  | { type: "tool-ran" }
   | { type: "clear-signal" }
   | { type: "none" };
 
 /** Permission prompts can come one after another; one alert per two minutes is enough to get you there. */
 export const NEEDS_INPUT_WINDOW_MS = 2 * 60_000;
 
+/**
+ * How long a Codex approval request may go unanswered before it counts as "needs you". Codex's
+ * auto-review answers most in a second or two, and in the owner's logs every escalated command had
+ * finished within 28 s (docs/agents.md).
+ */
+export const PENDING_WAIT_MS = 45_000;
+
+const NEEDS_INPUT: SendAction = { type: "send", kind: "needs_input", fallback: false, consume: false, rateLimitMs: NEEDS_INPUT_WINDOW_MS };
+
+/** Events after which none of the session's approval requests can still be waiting. */
+const ENDS_WAITING = new Set(["Stop", "StopFailure", "UserPromptSubmit"]);
+
 export interface Deps {
   home: string;
   now: () => number;
   send: (event: AlarmEvent) => void | Promise<void>;
+  /** Starts a detached waiter that runs firePending(id, at) after PENDING_WAIT_MS. */
+  wait: (id: string, at: number) => void;
   cwd: () => string;
 }
 
@@ -43,13 +79,18 @@ export function parseHookInput(raw: string): HookInput | null {
     const event = str(data.hook_event_name);
     if (!event) return null;
     const toolInput = data.tool_input && typeof data.tool_input === "object" ? (data.tool_input as Record<string, unknown>) : {};
+    const command = str(toolInput.command);
+    // Codex gives an approval request and the tool run that follows it the same command (shell,
+    // apply_patch); a request's description isn't part of it. Other tools (MCP) compare their input whole.
+    const request = command ?? (data.tool_input === undefined ? undefined : JSON.stringify(data.tool_input));
     return {
       event,
       sessionId: str(data.session_id),
       cwd: str(data.cwd),
       turnId: str(data.turn_id),
       promptId: str(data.prompt_id),
-      command: str(toolInput.command),
+      command,
+      requestHash: request === undefined ? undefined : createHash("sha256").update(request).digest("hex").slice(0, 16),
     };
   } catch {
     return null;
@@ -178,7 +219,7 @@ export function ownCommand(command: string | undefined, cwd: string): OwnCommand
 }
 
 /** Which alert, if any, an agent event means (docs/protocol.md, "When an event is sent"). */
-export function actionFor(_agent: HookAgent, input: HookInput, cwd: string): Action {
+export function actionFor(agent: HookAgent, input: HookInput, cwd: string): Action {
   switch (input.event) {
     case "Stop":
       // Fires after every turn. Only a fallback: an explicit signal this turn takes precedence.
@@ -193,8 +234,12 @@ export function actionFor(_agent: HookAgent, input: HookInput, cwd: string): Act
       if (own?.sub === "failed") return { type: "signal", kind: "failed", cwd: own.cwd };
       // Approving our own arm, status and the like isn't "the agent needs you".
       if (own) return { type: "none" };
-      return { type: "send", kind: "needs_input", fallback: false, consume: false, rateLimitMs: NEEDS_INPUT_WINDOW_MS };
+      // Codex fires this before it decides who answers, and its auto-review often approves within a
+      // second or two without asking anyone. So wait, and ring only if the request goes unanswered.
+      return agent === "codex" ? { type: "await-answer" } : NEEDS_INPUT;
     }
+    case "PostToolUse":
+      return agent === "codex" ? { type: "tool-ran" } : { type: "none" };
     case "UserPromptSubmit":
       return { type: "clear-signal" };
     default:
@@ -213,12 +258,25 @@ export async function runHook(agent: HookAgent, raw: string, deps: Deps): Promis
     const input = parseHookInput(raw);
     if (!input) return "";
     const cwd = input.cwd ?? deps.cwd();
+    if (input.sessionId && ENDS_WAITING.has(input.event)) {
+      try {
+        clearSessionPending(deps.home, input.sessionId);
+      } catch {
+        // At worst a needless "needs you" later; the alert this event may send matters more.
+      }
+    }
     const action = actionFor(agent, input, cwd);
     if (action.type === "none") return "";
     if (action.type === "signal") {
       // The agent is waiting for approval to run `code-alarm <signal>`: that wait is the signal.
       const result = await sendSignal(action.kind, agentOf(agent), action.cwd, deps, input.sessionId);
       return result.sent ? `hook ${agent} ${input.event}: ${action.kind} signal sent while awaiting approval` : "";
+    }
+    if (action.type === "tool-ran") {
+      // The tool ran, so its approval request was answered, by the user or by auto-review.
+      if (!input.sessionId || !input.requestHash) return "";
+      const answered = clearPending(deps.home, pendingId(input.sessionId, input.requestHash));
+      return answered ? `hook ${agent} ${input.event}: the approval request was answered, no needs_input` : "";
     }
     const now = deps.now();
     if (action.type === "clear-signal") {
@@ -228,40 +286,76 @@ export async function runHook(agent: HookAgent, raw: string, deps: Deps): Promis
       if (arming) clearSignaled(deps.home, arming.key);
       return "";
     }
-    const arming = findArming(deps.home, cwd, now);
-    if (!arming) return ""; // Not armed: send nothing.
-    const event = buildEvent({
-      kind: action.kind,
-      level: arming.level ?? "alarm",
-      label: labelFor(arming.dir ?? cwd),
-      agent: agentOf(agent),
-      now,
-      idParts: [agent, input.sessionId, input.turnId ?? input.promptId, action.kind],
-    });
-    // End-of-turn hooks can fire twice for one turn (another plugin's Stop hook can make the agent
-    // go on). Both get the same event ID, so only the first one counts.
-    if (action.consume && !claimEvent(deps.home, event.id, now)) {
-      return `hook ${agent} ${input.event}: skipped, already handled for this turn`;
-    }
-    if (action.fallback) {
-      // The session's own signal, or one sent without a session ID (e.g. from a terminal).
-      const keys = [signalKey(arming.key, input.sessionId), arming.key];
-      if (keys.some((key) => isSignaled(deps.home, key))) {
-        for (const key of keys) clearSignaled(deps.home, key);
-        return `hook ${agent} ${input.event}: skipped, the agent already signalled this turn`;
+    if (action.type === "await-answer") {
+      if (!findArming(deps.home, cwd, now)) return ""; // Not armed: send nothing, and don't wait.
+      if (input.sessionId && input.requestHash) {
+        const id = pendingId(input.sessionId, input.requestHash);
+        try {
+          recordPending(deps.home, id, { at: now, cwd, sessionId: input.sessionId, turnId: input.turnId });
+          deps.wait(id, now);
+          return `hook ${agent} ${input.event}: needs_input in ${PENDING_WAIT_MS / 1000}s unless answered`;
+        } catch {
+          // Can't wait for the answer, so say it now: a needless alert is better than a lost one.
+        }
       }
+      return await sendAction(agent, NEEDS_INPUT, input, cwd, deps);
     }
-    if (action.rateLimitMs && rateLimited(deps.home, arming.key, action.kind, now, action.rateLimitMs)) {
-      return `hook ${agent} ${input.event}: skipped, ${action.kind} sent less than ${action.rateLimitMs / 1000}s ago`;
-    }
-    if (action.consume && !claim(deps.home, arming)) {
-      return `hook ${agent} ${input.event}: skipped, another alert already ended this arming`;
-    }
-    await deps.send(event);
-    return `hook ${agent} ${input.event}: ${action.kind} queued`;
+    return await sendAction(agent, action, input, cwd, deps);
   } catch (e) {
     return `hook ${agent}: error ${e instanceof Error ? e.message : String(e)}`;
   }
+}
+
+/**
+ * Runs in the detached waiter, PENDING_WAIT_MS after a Codex approval request: sends needs_input
+ * if nothing has answered the request since (its tool hasn't run and the turn hasn't ended).
+ * Never throws.
+ */
+export async function firePending(id: string, at: number, deps: Deps): Promise<string> {
+  try {
+    const pending = takePending(deps.home, id, at);
+    if (!pending) return "";
+    const input: HookInput = { event: "PermissionRequest", sessionId: pending.sessionId, turnId: pending.turnId };
+    const note = await sendAction("codex", NEEDS_INPUT, input, pending.cwd, deps);
+    return note && `${note}, unanswered for ${PENDING_WAIT_MS / 1000}s`;
+  } catch (e) {
+    return `hook codex: error ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+async function sendAction(agent: HookAgent, action: SendAction, input: HookInput, cwd: string, deps: Deps): Promise<string> {
+  const now = deps.now();
+  const arming = findArming(deps.home, cwd, now);
+  if (!arming) return ""; // Not armed: send nothing.
+  const event = buildEvent({
+    kind: action.kind,
+    level: arming.level ?? "alarm",
+    label: labelFor(arming.dir ?? cwd),
+    agent: agentOf(agent),
+    now,
+    idParts: [agent, input.sessionId, input.turnId ?? input.promptId, action.kind],
+  });
+  // End-of-turn hooks can fire twice for one turn (another plugin's Stop hook can make the agent
+  // go on). Both get the same event ID, so only the first one counts.
+  if (action.consume && !claimEvent(deps.home, event.id, now)) {
+    return `hook ${agent} ${input.event}: skipped, already handled for this turn`;
+  }
+  if (action.fallback) {
+    // The session's own signal, or one sent without a session ID (e.g. from a terminal).
+    const keys = [signalKey(arming.key, input.sessionId), arming.key];
+    if (keys.some((key) => isSignaled(deps.home, key))) {
+      for (const key of keys) clearSignaled(deps.home, key);
+      return `hook ${agent} ${input.event}: skipped, the agent already signalled this turn`;
+    }
+  }
+  if (action.rateLimitMs && rateLimited(deps.home, arming.key, action.kind, now, action.rateLimitMs)) {
+    return `hook ${agent} ${input.event}: skipped, ${action.kind} sent less than ${action.rateLimitMs / 1000}s ago`;
+  }
+  if (action.consume && !claim(deps.home, arming)) {
+    return `hook ${agent} ${input.event}: skipped, another alert already ended this arming`;
+  }
+  await deps.send(event);
+  return `hook ${agent} ${input.event}: ${action.kind} queued`;
 }
 
 async function sendSignal(

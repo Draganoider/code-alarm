@@ -2,10 +2,10 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { DEFAULT_NTFY_SERVER, ConfigError, isValidTopic, loadConfig, newTopic, saveConfig } from "./config.js";
-import { decodeEvent, logLine, recentLog, sendDetached, sendNow } from "./deliver.js";
+import { decodeEvent, logLine, recentLog, sendDetached, sendNow, waitDetached } from "./deliver.js";
 import { HOUR, MAX_ARM_MS, formatDuration, parseDuration } from "./duration.js";
 import { type Agent, buildEvent, labelFor } from "./events.js";
-import { type HookAgent, type SignalKind, runHook, runSignal, sessionFromEnv } from "./hook.js";
+import { type Deps, type HookAgent, PENDING_WAIT_MS, type SignalKind, firePending, runHook, runSignal, sessionFromEnv } from "./hook.js";
 import { codexInstalled, installCodex, uninstallCodex } from "./install.js";
 import { alarmHome } from "./paths.js";
 import { skillMarkdown } from "./skill.js";
@@ -80,7 +80,13 @@ function setupHint(): string {
 export async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   const home = alarmHome();
-  const deps = { home, now: Date.now, send: (event: Parameters<typeof sendDetached>[0]) => sendDetached(event), cwd: () => process.cwd() };
+  const deps: Deps = {
+    home,
+    now: Date.now,
+    send: (event) => sendDetached(event),
+    wait: (id, at) => waitDetached(id, at),
+    cwd: () => process.cwd(),
+  };
 
   switch (command) {
     case "hook": {
@@ -94,6 +100,16 @@ export async function main(argv: string[]): Promise<number> {
     case "__send": {
       const event = decodeEvent(rest[0] ?? "");
       if (event) await sendNow(home, event);
+      return 0;
+    }
+
+    case "__wait": {
+      // The detached waiter behind a Codex approval request (hook.ts, firePending).
+      const [id = "", at = ""] = rest;
+      if (!/^[\w-]+$/.test(id) || !/^\d+$/.test(at)) return 0;
+      await new Promise((done) => setTimeout(done, PENDING_WAIT_MS));
+      const note = await firePending(id, Number(at), deps);
+      if (note) logLine(home, note);
       return 0;
     }
 
@@ -271,7 +287,7 @@ Then connect your agent:
   }
 }
 
-const quiet = process.argv[2] === "hook" || process.argv[2] === "__send";
+const quiet = ["hook", "__send", "__wait"].includes(process.argv[2] ?? "");
 main(process.argv.slice(2)).then(
   (code) => {
     process.exitCode = quiet ? 0 : code;

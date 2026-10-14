@@ -164,9 +164,15 @@ async function sendNow(home, event, fetchImpl) {
   return result;
 }
 function sendDetached(event, script = process.argv[1]) {
-  if (!script) return;
   const payload = Buffer.from(JSON.stringify(event)).toString("base64url");
-  const child = spawn(process.execPath, [script, "__send", payload], { detached: true, stdio: "ignore", windowsHide: true });
+  runDetached(script, ["__send", payload]);
+}
+function waitDetached(id, at, script = process.argv[1]) {
+  runDetached(script, ["__wait", id, String(at)]);
+}
+function runDetached(script, args) {
+  if (!script) return;
+  const child = spawn(process.execPath, [script, ...args], { detached: true, stdio: "ignore", windowsHide: true });
   child.on("error", () => {
   });
   child.unref();
@@ -207,6 +213,7 @@ function formatDuration(ms) {
 }
 
 // src/hook.ts
+import { createHash as createHash3 } from "node:crypto";
 import { resolve as resolve2 } from "node:path";
 
 // src/state.ts
@@ -352,6 +359,37 @@ function signaledKind(home, key) {
 function clearSignaled(home, key) {
   rmSync(signalFile(home, key), { force: true });
 }
+var pendingFile = (home, id) => join3(home, "pending", `${id}.json`);
+var sessionPrefix = (sessionId) => `${signalKey("", sessionId)}-`;
+function pendingId(sessionId, requestHash) {
+  return `${sessionPrefix(sessionId)}${requestHash}`;
+}
+function recordPending(home, id, pending) {
+  writeFileAtomic(pendingFile(home, id), JSON.stringify(pending));
+}
+function takePending(home, id, at) {
+  const path = pendingFile(home, id);
+  try {
+    const pending = JSON.parse(readFileSync3(path, "utf8"));
+    if (pending.at !== at) return null;
+    rmSync(path, { force: true });
+    return pending;
+  } catch {
+    return null;
+  }
+}
+function clearPending(home, id) {
+  const path = pendingFile(home, id);
+  const existed = existsSync2(path);
+  rmSync(path, { force: true });
+  return existed;
+}
+function clearSessionPending(home, sessionId) {
+  const dir = join3(home, "pending");
+  if (!existsSync2(dir)) return;
+  const prefix = sessionPrefix(sessionId);
+  for (const file of readdirSync(dir)) if (file.startsWith(prefix)) rmSync(join3(dir, file), { force: true });
+}
 function rateLimited(home, key, kind, now, windowMs) {
   const path = sentFile(home, key, kind);
   try {
@@ -366,6 +404,9 @@ function rateLimited(home, key, kind, now, windowMs) {
 
 // src/hook.ts
 var NEEDS_INPUT_WINDOW_MS = 2 * 6e4;
+var PENDING_WAIT_MS = 45e3;
+var NEEDS_INPUT = { type: "send", kind: "needs_input", fallback: false, consume: false, rateLimitMs: NEEDS_INPUT_WINDOW_MS };
+var ENDS_WAITING = /* @__PURE__ */ new Set(["Stop", "StopFailure", "UserPromptSubmit"]);
 var str = (value) => typeof value === "string" && value !== "" ? value : void 0;
 function parseHookInput(raw) {
   try {
@@ -373,13 +414,16 @@ function parseHookInput(raw) {
     const event = str(data.hook_event_name);
     if (!event) return null;
     const toolInput = data.tool_input && typeof data.tool_input === "object" ? data.tool_input : {};
+    const command = str(toolInput.command);
+    const request = command ?? (data.tool_input === void 0 ? void 0 : JSON.stringify(data.tool_input));
     return {
       event,
       sessionId: str(data.session_id),
       cwd: str(data.cwd),
       turnId: str(data.turn_id),
       promptId: str(data.prompt_id),
-      command: str(toolInput.command)
+      command,
+      requestHash: request === void 0 ? void 0 : createHash3("sha256").update(request).digest("hex").slice(0, 16)
     };
   } catch {
     return null;
@@ -476,7 +520,7 @@ function ownInLine(line, cwd, depth) {
 function ownCommand(command, cwd) {
   return command ? ownInLine(command, resolve2(cwd), 0) : null;
 }
-function actionFor(_agent, input, cwd) {
+function actionFor(agent, input, cwd) {
   switch (input.event) {
     case "Stop":
       return { type: "send", kind: "stopped", fallback: true, consume: true };
@@ -488,8 +532,10 @@ function actionFor(_agent, input, cwd) {
       if (own?.sub === "needs-you") return { type: "signal", kind: "needs_input", cwd: own.cwd };
       if (own?.sub === "failed") return { type: "signal", kind: "failed", cwd: own.cwd };
       if (own) return { type: "none" };
-      return { type: "send", kind: "needs_input", fallback: false, consume: false, rateLimitMs: NEEDS_INPUT_WINDOW_MS };
+      return agent === "codex" ? { type: "await-answer" } : NEEDS_INPUT;
     }
+    case "PostToolUse":
+      return agent === "codex" ? { type: "tool-ran" } : { type: "none" };
     case "UserPromptSubmit":
       return { type: "clear-signal" };
     default:
@@ -502,50 +548,89 @@ async function runHook(agent, raw, deps) {
     const input = parseHookInput(raw);
     if (!input) return "";
     const cwd = input.cwd ?? deps.cwd();
+    if (input.sessionId && ENDS_WAITING.has(input.event)) {
+      try {
+        clearSessionPending(deps.home, input.sessionId);
+      } catch {
+      }
+    }
     const action = actionFor(agent, input, cwd);
     if (action.type === "none") return "";
     if (action.type === "signal") {
       const result = await sendSignal(action.kind, agentOf(agent), action.cwd, deps, input.sessionId);
       return result.sent ? `hook ${agent} ${input.event}: ${action.kind} signal sent while awaiting approval` : "";
     }
+    if (action.type === "tool-ran") {
+      if (!input.sessionId || !input.requestHash) return "";
+      const answered = clearPending(deps.home, pendingId(input.sessionId, input.requestHash));
+      return answered ? `hook ${agent} ${input.event}: the approval request was answered, no needs_input` : "";
+    }
     const now = deps.now();
     if (action.type === "clear-signal") {
       if (input.sessionId) clearSignaled(deps.home, signalKey("", input.sessionId));
-      const arming2 = findArming(deps.home, cwd, now);
-      if (arming2) clearSignaled(deps.home, arming2.key);
+      const arming = findArming(deps.home, cwd, now);
+      if (arming) clearSignaled(deps.home, arming.key);
       return "";
     }
-    const arming = findArming(deps.home, cwd, now);
-    if (!arming) return "";
-    const event = buildEvent({
-      kind: action.kind,
-      level: arming.level ?? "alarm",
-      label: labelFor(arming.dir ?? cwd),
-      agent: agentOf(agent),
-      now,
-      idParts: [agent, input.sessionId, input.turnId ?? input.promptId, action.kind]
-    });
-    if (action.consume && !claimEvent(deps.home, event.id, now)) {
-      return `hook ${agent} ${input.event}: skipped, already handled for this turn`;
-    }
-    if (action.fallback) {
-      const keys = [signalKey(arming.key, input.sessionId), arming.key];
-      if (keys.some((key) => isSignaled(deps.home, key))) {
-        for (const key of keys) clearSignaled(deps.home, key);
-        return `hook ${agent} ${input.event}: skipped, the agent already signalled this turn`;
+    if (action.type === "await-answer") {
+      if (!findArming(deps.home, cwd, now)) return "";
+      if (input.sessionId && input.requestHash) {
+        const id = pendingId(input.sessionId, input.requestHash);
+        try {
+          recordPending(deps.home, id, { at: now, cwd, sessionId: input.sessionId, turnId: input.turnId });
+          deps.wait(id, now);
+          return `hook ${agent} ${input.event}: needs_input in ${PENDING_WAIT_MS / 1e3}s unless answered`;
+        } catch {
+        }
       }
+      return await sendAction(agent, NEEDS_INPUT, input, cwd, deps);
     }
-    if (action.rateLimitMs && rateLimited(deps.home, arming.key, action.kind, now, action.rateLimitMs)) {
-      return `hook ${agent} ${input.event}: skipped, ${action.kind} sent less than ${action.rateLimitMs / 1e3}s ago`;
-    }
-    if (action.consume && !claim(deps.home, arming)) {
-      return `hook ${agent} ${input.event}: skipped, another alert already ended this arming`;
-    }
-    await deps.send(event);
-    return `hook ${agent} ${input.event}: ${action.kind} queued`;
+    return await sendAction(agent, action, input, cwd, deps);
   } catch (e) {
     return `hook ${agent}: error ${e instanceof Error ? e.message : String(e)}`;
   }
+}
+async function firePending(id, at, deps) {
+  try {
+    const pending = takePending(deps.home, id, at);
+    if (!pending) return "";
+    const input = { event: "PermissionRequest", sessionId: pending.sessionId, turnId: pending.turnId };
+    const note = await sendAction("codex", NEEDS_INPUT, input, pending.cwd, deps);
+    return note && `${note}, unanswered for ${PENDING_WAIT_MS / 1e3}s`;
+  } catch (e) {
+    return `hook codex: error ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+async function sendAction(agent, action, input, cwd, deps) {
+  const now = deps.now();
+  const arming = findArming(deps.home, cwd, now);
+  if (!arming) return "";
+  const event = buildEvent({
+    kind: action.kind,
+    level: arming.level ?? "alarm",
+    label: labelFor(arming.dir ?? cwd),
+    agent: agentOf(agent),
+    now,
+    idParts: [agent, input.sessionId, input.turnId ?? input.promptId, action.kind]
+  });
+  if (action.consume && !claimEvent(deps.home, event.id, now)) {
+    return `hook ${agent} ${input.event}: skipped, already handled for this turn`;
+  }
+  if (action.fallback) {
+    const keys = [signalKey(arming.key, input.sessionId), arming.key];
+    if (keys.some((key) => isSignaled(deps.home, key))) {
+      for (const key of keys) clearSignaled(deps.home, key);
+      return `hook ${agent} ${input.event}: skipped, the agent already signalled this turn`;
+    }
+  }
+  if (action.rateLimitMs && rateLimited(deps.home, arming.key, action.kind, now, action.rateLimitMs)) {
+    return `hook ${agent} ${input.event}: skipped, ${action.kind} sent less than ${action.rateLimitMs / 1e3}s ago`;
+  }
+  if (action.consume && !claim(deps.home, arming)) {
+    return `hook ${agent} ${input.event}: skipped, another alert already ended this arming`;
+  }
+  await deps.send(event);
+  return `hook ${agent} ${input.event}: ${action.kind} queued`;
 }
 async function sendSignal(kind, agent, cwd, deps, sessionId) {
   const now = deps.now();
@@ -621,7 +706,7 @@ function codexPaths(alarmHome2, userHome) {
     cli: join4(alarmHome2, "bin", "code-alarm.mjs")
   };
 }
-var CODEX_EVENTS = ["Stop", "PermissionRequest", "UserPromptSubmit"];
+var CODEX_EVENTS = ["Stop", "PermissionRequest", "PostToolUse", "UserPromptSubmit"];
 var slashes = (path) => path.replace(/\\/g, "/");
 function codexCommand(cli) {
   return `node "${slashes(cli)}" hook codex`;
@@ -812,7 +897,13 @@ function setupHint() {
 async function main(argv) {
   const [command, ...rest] = argv;
   const home = alarmHome();
-  const deps = { home, now: Date.now, send: (event) => sendDetached(event), cwd: () => process.cwd() };
+  const deps = {
+    home,
+    now: Date.now,
+    send: (event) => sendDetached(event),
+    wait: (id, at) => waitDetached(id, at),
+    cwd: () => process.cwd()
+  };
   switch (command) {
     case "hook": {
       const agent = rest[0];
@@ -824,6 +915,14 @@ async function main(argv) {
     case "__send": {
       const event = decodeEvent(rest[0] ?? "");
       if (event) await sendNow(home, event);
+      return 0;
+    }
+    case "__wait": {
+      const [id = "", at = ""] = rest;
+      if (!/^[\w-]+$/.test(id) || !/^\d+$/.test(at)) return 0;
+      await new Promise((done) => setTimeout(done, PENDING_WAIT_MS));
+      const note = await firePending(id, Number(at), deps);
+      if (note) logLine(home, note);
       return 0;
     }
     case "__skill":
@@ -984,7 +1083,7 @@ ${HELP}`);
       return 1;
   }
 }
-var quiet = process.argv[2] === "hook" || process.argv[2] === "__send";
+var quiet = ["hook", "__send", "__wait"].includes(process.argv[2] ?? "");
 main(process.argv.slice(2)).then(
   (code) => {
     process.exitCode = quiet ? 0 : code;

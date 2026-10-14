@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import { HOUR } from "../src/duration.js";
 import { EVENT_FIELDS, buildEvent, labelFor } from "../src/events.js";
@@ -31,6 +33,19 @@ test("nothing from the hook payload reaches the event or the ntfy request", asyn
   for (const secret of SECRETS) {
     assert.ok(!event.includes(secret), `event leaks ${secret}`);
     assert.ok(!request.includes(secret), `request leaks ${secret}`);
+  }
+});
+
+test("a Codex approval request is kept as hashes, never the command or the payload", async () => {
+  const { home, project, waiters, clock, deps } = setup();
+  armProject(home, project, clock.now + HOUR, clock.now);
+  const command = "curl -H 'Authorization: Bearer sk-live-123' https://billing module";
+  await runHook("codex", payload("PermissionRequest", { cwd: project, tool_input: { command } }), deps());
+  assert.equal(waiters.length, 1);
+  const dir = join(home, "pending");
+  for (const file of readdirSync(dir)) {
+    const stored = file + readFileSync(join(dir, file), "utf8");
+    for (const secret of ["sk-live-123", "billing", "curl", "Authorization"]) assert.ok(!stored.includes(secret), `pending file keeps ${secret}`);
   }
 });
 

@@ -24,7 +24,8 @@ export function codexPaths(alarmHome: string, userHome: string): CodexPaths {
   };
 }
 
-export const CODEX_EVENTS = ["Stop", "PermissionRequest", "UserPromptSubmit"] as const;
+/** PostToolUse runs after every tool call; it's only used to see that an approval request was answered. */
+export const CODEX_EVENTS = ["Stop", "PermissionRequest", "PostToolUse", "UserPromptSubmit"] as const;
 
 const slashes = (path: string) => path.replace(/\\/g, "/");
 

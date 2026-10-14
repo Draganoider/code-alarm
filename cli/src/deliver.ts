@@ -45,9 +45,21 @@ export async function sendNow(home: string, event: AlarmEvent, fetchImpl?: typeo
  * network can never hold up the agent (hard rule 6).
  */
 export function sendDetached(event: AlarmEvent, script: string | undefined = process.argv[1]): void {
-  if (!script) return;
   const payload = Buffer.from(JSON.stringify(event)).toString("base64url");
-  const child = spawn(process.execPath, [script, "__send", payload], { detached: true, stdio: "ignore", windowsHide: true });
+  runDetached(script, ["__send", payload]);
+}
+
+/**
+ * Starts the waiter for a Codex approval request (hook.ts, firePending), detached the same way.
+ * Codex lets a hook's detached helpers outlive it when the hook exits normally (docs/agents.md).
+ */
+export function waitDetached(id: string, at: number, script: string | undefined = process.argv[1]): void {
+  runDetached(script, ["__wait", id, String(at)]);
+}
+
+function runDetached(script: string | undefined, args: string[]): void {
+  if (!script) return;
+  const child = spawn(process.execPath, [script, ...args], { detached: true, stdio: "ignore", windowsHide: true });
   child.on("error", () => {});
   child.unref();
 }

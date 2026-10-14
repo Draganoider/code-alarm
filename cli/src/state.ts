@@ -207,6 +207,58 @@ export function clearSignaled(home: string, key: string): void {
   rmSync(signalFile(home, key), { force: true });
 }
 
+/**
+ * A Codex approval request that may be waiting for the user, or may be answered by Codex's
+ * auto-review in a second or two (docs/protocol.md). Its file is named after hashes of the session
+ * and the command, so the command itself is never stored.
+ */
+export interface PendingApproval {
+  at: number;
+  cwd: string;
+  sessionId: string;
+  turnId?: string;
+}
+
+const pendingFile = (home: string, id: string) => join(home, "pending", `${id}.json`);
+const sessionPrefix = (sessionId: string) => `${signalKey("", sessionId)}-`;
+
+export function pendingId(sessionId: string, requestHash: string): string {
+  return `${sessionPrefix(sessionId)}${requestHash}`;
+}
+
+export function recordPending(home: string, id: string, pending: PendingApproval): void {
+  writeFileAtomic(pendingFile(home, id), JSON.stringify(pending));
+}
+
+/** The request recorded at `at`, removed, if nothing has answered it since; otherwise null. */
+export function takePending(home: string, id: string, at: number): PendingApproval | null {
+  const path = pendingFile(home, id);
+  try {
+    const pending = JSON.parse(readFileSync(path, "utf8")) as PendingApproval;
+    if (pending.at !== at) return null; // asked again since then: the newer request's waiter decides
+    rmSync(path, { force: true });
+    return pending;
+  } catch {
+    return null; // answered: the tool ran, or the turn ended
+  }
+}
+
+/** The tool ran, so its request was answered. True if one was pending. */
+export function clearPending(home: string, id: string): boolean {
+  const path = pendingFile(home, id);
+  const existed = existsSync(path);
+  rmSync(path, { force: true });
+  return existed;
+}
+
+/** The session's turn ended or a new one began: none of its requests is still waiting. */
+export function clearSessionPending(home: string, sessionId: string): void {
+  const dir = join(home, "pending");
+  if (!existsSync(dir)) return;
+  const prefix = sessionPrefix(sessionId);
+  for (const file of readdirSync(dir)) if (file.startsWith(prefix)) rmSync(join(dir, file), { force: true });
+}
+
 /** True if `kind` was already sent for this arming within `windowMs`; otherwise records it as sent now. */
 export function rateLimited(home: string, key: string, kind: string, now: number, windowMs: number): boolean {
   const path = sentFile(home, key, kind);
