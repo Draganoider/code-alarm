@@ -685,7 +685,8 @@ Then connect your agent:
       }
       const event = buildEvent({ kind: "test", level: values.notify ? "notify" : "alarm", label: "test", agent: "cli", now: Date.now() });
       const result = await sendNow(home, event);
-      console.log(result.ok ? "Sent. Your phone should be ringing now." : `Couldn't send the test alarm: ${result.detail}.`);
+      const expected = values.notify ? "You should get one notification now, with sound and vibration." : "Your phone should be ringing now, until you dismiss it.";
+      console.log(result.ok ? `Sent. ${expected}` : `Couldn't send the test: ${result.detail}.`);
       return result.ok ? 0 : 1;
     }
     case "arm": {
