@@ -1,0 +1,15 @@
+{
+  "name": "code-alarm",
+  "description": "Code Alarm: a real alarm on your phone when your coding agent finishes or needs you.",
+  "owner": {
+    "name": "Yevhen Mishchenko",
+    "url": "https://github.com/Draganoider"
+  },
+  "plugins": [
+    {
+      "name": "code-alarm",
+      "source": "./plugins/claude-code",
+      "description": "Rings your phone when an armed Claude Code session finishes, stops or needs your approval. Free, with the ntfy app."
+    }
+  ]
+}
