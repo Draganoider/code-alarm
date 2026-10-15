@@ -1,0 +1,13 @@
+{
+  "name": "code-alarm",
+  "version": "0.1.0",
+  "description": "A real alarm on your phone when Claude Code finishes or needs you. Arm a task with /code-alarm:alarm; only armed work rings.",
+  "author": {
+    "name": "Yevhen Mishchenko",
+    "url": "https://github.com/Draganoider"
+  },
+  "homepage": "https://github.com/Draganoider/code-alarm",
+  "repository": "https://github.com/Draganoider/code-alarm",
+  "license": "MIT",
+  "keywords": ["alarm", "notifications", "phone", "ntfy", "hooks"]
+}

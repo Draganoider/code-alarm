@@ -1,0 +1,102 @@
+name: CI
+
+# Work is pushed to test; main only changes by a release pull request (AGENTS.md).
+on:
+  push:
+    branches: [test, main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cli:
+    name: CLI (Node ${{ matrix.node }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ["22", "24"]
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: The committed bundle and plugin files are up to date
+        shell: bash
+        run: |
+          if ! git diff --exit-code -- dist ../plugins/claude-code; then
+            echo "::error::The bundle or the plugin's generated files are stale. Run npm run build in cli/ and commit the result."
+            exit 1
+          fi
+
+  hygiene:
+    name: Hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: No secrets committed
+        run: |
+          # A user's code-alarm config is named exactly config.json (tsconfig.json is fine).
+          found=$(git ls-files -- '.env' '*/.env' 'config.json' '*/config.json' | head -5)
+          if [ -n "$found" ]; then echo "::error::A config or .env file is committed:"; echo "$found"; exit 1; fi
+          echo "OK"
+      - name: JSON files parse
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            python3 -c "import json,sys; json.load(open(sys.argv[1],encoding='utf-8'))" "$f" || { echo "::error file=$f::Invalid JSON"; fail=1; }
+          done < <(git ls-files '*.json')
+          exit $fail
+      - name: Links between docs resolve
+        run: python3 .github/scripts/check_links.py
+      - name: No attribution lines
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess, sys
+          def is_commit(ref):
+              return bool(ref) and subprocess.run(["git", "cat-file", "-e", ref + "^{commit}"], capture_output=True).returncode == 0
+          if os.environ["EVENT"] == "pull_request":
+              rev_range = f"{os.environ['PR_BASE']}..{os.environ['PR_HEAD']}"
+          else:
+              before, after = os.environ.get("PUSH_BEFORE", ""), os.environ["PUSH_AFTER"]
+              rev_range = f"{before}..{after}" if before.strip("0") and is_commit(before) else after
+          tools = "claude|codex|copilot|cursor|chatgpt|gpt|gemini|aider|windsurf|devin|openai|anthropic"
+          trailer = re.compile(r"^\s*(?:co-authored-by\s*:|\W{0,3}\s*generated\s+(?:with|by)\s+\[?(?:" + tools + r")\b)", re.I | re.M)
+          log = subprocess.run(["git", "log", "--format=%h%x00%B%x01", rev_range], capture_output=True, text=True, check=True).stdout
+          errors = []
+          for c in [c.strip("\n") for c in log.split("\x01") if c.strip()]:
+              sha, _, body = c.partition("\x00")
+              errors += [f"::error::Commit {sha} carries an attribution line." for _ in trailer.finditer(body)]
+          errors += ["::error::The pull request description carries an attribution line." for _ in trailer.finditer(os.environ.get("PR_BODY") or "")]
+          print("\n".join(errors) if errors else "OK: no attribution lines")
+          sys.exit(1 if errors else 0)
+          PY

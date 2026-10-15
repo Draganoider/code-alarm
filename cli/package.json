@@ -1,0 +1,35 @@
+{
+  "name": "code-alarm",
+  "version": "0.1.0",
+  "description": "Wake up when Claude Code or Codex finishes or needs you: a real alarm on your phone, from agent hooks.",
+  "license": "MIT",
+  "author": "Yevhen Mishchenko",
+  "homepage": "https://github.com/Draganoider/code-alarm#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Draganoider/code-alarm.git",
+    "directory": "cli"
+  },
+  "bugs": "https://github.com/Draganoider/code-alarm/issues",
+  "keywords": ["claude-code", "codex", "alarm", "notifications", "ntfy", "hooks", "ai-agents"],
+  "type": "module",
+  "bin": {
+    "code-alarm": "dist/code-alarm.mjs"
+  },
+  "files": ["dist/code-alarm.mjs"],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "node build.mjs",
+    "test": "tsc -p tsconfig.test.json && node --test \"build/test/**/*.test.js\"",
+    "check": "npm run typecheck && npm test && npm run build",
+    "prepack": "node -e \"for (const f of ['LICENSE', 'README.md']) require('node:fs').copyFileSync('../' + f, f)\""
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  }
+}
