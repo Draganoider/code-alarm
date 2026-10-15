@@ -6,6 +6,8 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-10-14
+
 ### Added
 
 - The `code-alarm` CLI, Node 22+, with no runtime dependencies.
@@ -40,3 +42,6 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
 - `install codex` backs up a rules file or skill it didn't write, and refuses a folder it can't
   quote safely; `uninstall codex` removes only its own files. The npm package includes the
   license and README. `status` never shows the topic.
+
+[Unreleased]: https://github.com/Draganoider/code-alarm/compare/v0.1.0...test
+[0.1.0]: https://github.com/Draganoider/code-alarm/releases/tag/v0.1.0
