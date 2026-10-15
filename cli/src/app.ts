@@ -8,16 +8,15 @@ import type { SendResult } from "./ntfy.js";
  * the Authorization header.
  */
 
-/** The public relay's address, set once it's live. Until then, `pair --relay <url>` or CODE_ALARM_RELAY. */
-export const DEFAULT_RELAY: string | null = null;
+/** The Code Alarm relay. `pair --relay <url>` or CODE_ALARM_RELAY points a pairing elsewhere (a local test relay). */
+export const DEFAULT_RELAY = "https://relay.codealarm.workers.dev";
 export const RELAY_ENV = "CODE_ALARM_RELAY";
 
 const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 /** The relay to pair with: HTTPS, except on this computer (a local test relay). */
 export function relayUrl(given: string | undefined, env: NodeJS.ProcessEnv = process.env): string {
-  const raw = given ?? env[RELAY_ENV] ?? DEFAULT_RELAY;
-  if (!raw) throw new ConfigError("The Code Alarm relay isn't public yet. Pass --relay <url> if you were given one.");
+  const raw = given ?? (env[RELAY_ENV] || DEFAULT_RELAY);
   let url: URL;
   try {
     url = new URL(raw);

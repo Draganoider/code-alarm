@@ -92,7 +92,7 @@ vibration
 live only in your config file.
 
 **Code Alarm app** (in testing; the app isn't public yet). The same event goes to the Code Alarm
-relay, which pushes it to the paired Android phone. The app rings like an alarm clock, through Do
+relay (`https://relay.codealarm.workers.dev`), which pushes it to the paired Android phone. The app rings like an alarm clock, through Do
 Not Disturb, until you press Stop. It rejects expired events and events whose `id` it has already
 seen.
 

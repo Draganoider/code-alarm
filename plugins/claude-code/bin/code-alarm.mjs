@@ -80,12 +80,11 @@ function isValidTopic(topic) {
 }
 
 // src/app.ts
-var DEFAULT_RELAY = null;
+var DEFAULT_RELAY = "https://relay.codealarm.workers.dev";
 var RELAY_ENV = "CODE_ALARM_RELAY";
 var LOCAL_HOSTS = /* @__PURE__ */ new Set(["127.0.0.1", "localhost", "[::1]"]);
 function relayUrl(given, env = process.env) {
-  const raw = given ?? env[RELAY_ENV] ?? DEFAULT_RELAY;
-  if (!raw) throw new ConfigError("The Code Alarm relay isn't public yet. Pass --relay <url> if you were given one.");
+  const raw = given ?? (env[RELAY_ENV] || DEFAULT_RELAY);
   let url;
   try {
     url = new URL(raw);

@@ -55,7 +55,8 @@ after(() => {
 /** Runs the CLI without blocking, so the fake relay in this process can answer it. */
 function run(args: string[], home: string, env: Record<string, string> = {}): Promise<{ status: number | null; stdout: string }> {
   return new Promise((done) => {
-    const child = spawn(process.execPath, [MAIN, ...args], { env: { ...process.env, CODE_ALARM_HOME: home, CODE_ALARM_RELAY: "", ...env } });
+    // CODE_ALARM_RELAY points every run at the fake relay, so no test ever reaches the real one.
+    const child = spawn(process.execPath, [MAIN, ...args], { env: { ...process.env, CODE_ALARM_HOME: home, CODE_ALARM_RELAY: relay, ...env } });
     let stdout = "";
     child.stdout.on("data", (chunk) => (stdout += chunk));
     child.stderr.on("data", (chunk) => (stdout += chunk));
@@ -103,13 +104,12 @@ test("pair, test, status --last, use and unpair against a relay", async () => {
   assert.equal(after.app, undefined);
 });
 
-test("pair refuses a wrong code, and needs a relay address while the relay isn't public", async () => {
+test("pair refuses a wrong code and a relay that isn't HTTPS, and takes the relay from CODE_ALARM_RELAY", async () => {
   const home = tempDir();
-  const wrong = await run(["pair", "AAA-AAA", "--relay", relay], home);
+  const wrong = await run(["pair", "AAA-AAA"], home);
   assert.equal(wrong.status, 1);
   assert.match(wrong.stdout, /Couldn't pair: That code is wrong or has expired/);
-  const noRelay = await run(["pair", "K7Q-4MZ"], home);
-  assert.equal(noRelay.status, 1);
-  assert.match(noRelay.stdout, /isn't public yet/);
   assert.equal((await run(["pair", "K7Q-4MZ", "--relay", "http://relay.example"], home)).status, 1);
+  assert.equal((await run(["pair", "K7Q-4MZ"], home)).status, 0);
+  assert.equal(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).app.relay, relay);
 });

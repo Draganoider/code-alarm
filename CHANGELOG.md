@@ -16,7 +16,8 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
     it was sent, and when it was stopped.
   - Events go to the relay as they are, with the token only in a header. A failed push is retried
     once with the same ID, which the relay dedupes.
-  - The relay isn't public yet, so `pair` needs `--relay <url>` (or `CODE_ALARM_RELAY`).
+  - `pair` uses the Code Alarm relay at `https://relay.codealarm.workers.dev`; `--relay` or
+    `CODE_ALARM_RELAY` points it at another one, such as a local test relay.
 
 ## [0.1.0] — 2026-10-14
 

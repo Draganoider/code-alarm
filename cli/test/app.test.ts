@@ -52,7 +52,8 @@ test("the relay must be HTTPS, except on this computer", () => {
   for (const bad of ["http://relay.example", "ftp://relay.example", "https://relay.example/?x=1", "https://user:pw@relay.example", "nonsense"]) {
     assert.throws(() => relayUrl(bad), ConfigError, bad);
   }
-  assert.throws(() => relayUrl(undefined, {}), /isn't public yet/);
+  assert.equal(relayUrl(undefined, {}), "https://relay.codealarm.workers.dev");
+  assert.equal(relayUrl(undefined, { CODE_ALARM_RELAY: "" }), "https://relay.codealarm.workers.dev");
 });
 
 test("the default computer name is generic, never the hostname", () => {
