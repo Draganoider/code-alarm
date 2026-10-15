@@ -91,6 +91,39 @@ vibration
 ([format](https://docs.ntfy.sh/publish/#publish-as-json)). The ntfy topic and any access token
 live only in your config file.
 
-**Code Alarm app** (planned). The same event goes to a relay, which pushes it to the Code Alarm
-Android app. The app rings like an alarm clock, through Do Not Disturb, until you press Stop.
-The app rejects expired events and events whose `id` it has already seen.
+**Code Alarm app** (in testing; the app isn't public yet). The same event goes to the Code Alarm
+relay, which pushes it to the paired Android phone. The app rings like an alarm clock, through Do
+Not Disturb, until you press Stop. It rejects expired events and events whose `id` it has already
+seen.
+
+*Pairing.* The app shows a six-character code, valid for 10 minutes and usable once.
+`code-alarm pair <code>` sends the relay exactly two things:
+
+```json
+{ "code": "K7Q-4MZ", "name": "Windows PC" }
+```
+
+The name is how the phone lists this computer: `--name`, or a generic one for the operating system.
+Never the hostname. The relay answers with a token that can ring that one phone and nothing else.
+It lives in your config file (readable only by you), and is never printed or logged. Pairing
+switches the transport to the app and keeps any ntfy settings (`code-alarm use ntfy` switches
+back). Code Alarm sends through one transport at a time, never both, which would ring twice.
+
+*Sending.* `POST <relay>/v1/events` with `Authorization: Bearer <token>`; the body is the event,
+byte for byte. The relay checks it against this page too: it refuses any other field, a label that
+isn't plain characters, and an event that lives longer than an hour or has expired. It answers:
+
+| Answer | The CLI |
+|---|---|
+| 200 `{"status": "sent"}` | Done. `"limited": true` means it went out as a notification: over 12 events an hour from this computer, or 3 a minute to the phone |
+| 200 `{"status": "duplicate"}` | Done: the phone already has that `id`, so it won't ring again |
+| 502 `push_failed` | Tries once more, with the same event |
+| 401 | This computer was removed on the phone: pair again |
+| 400, 410, 429, 503 | Logs it. 429 means over 60 events in an hour; 503 means the phone needs to open the app once |
+
+*Status.* `code-alarm status --last` asks `GET <relay>/v1/events/<id>` what the phone did with the
+last alert: whether it rang, how long after it was sent, and when it was stopped. The relay keeps
+that, without the label, for a week.
+
+*Unpairing.* `code-alarm unpair` (`DELETE <relay>/v1/senders/<id>`), or remove the computer in the
+app. After that the token can't ring anything.

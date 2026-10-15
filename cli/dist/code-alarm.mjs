@@ -8,7 +8,7 @@ import { parseArgs } from "node:util";
 
 // src/config.ts
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 // src/fsutil.ts
@@ -28,6 +28,24 @@ var DEFAULT_NTFY_SERVER = "https://ntfy.sh";
 function configPath(home) {
   return join(home, "config.json");
 }
+function readNtfy(value) {
+  const ntfy = value;
+  if (!ntfy || typeof ntfy.server !== "string" || typeof ntfy.topic !== "string") return void 0;
+  return { server: ntfy.server, topic: ntfy.topic, ...ntfy.token ? { token: ntfy.token } : {} };
+}
+function readApp(value) {
+  const app = value;
+  if (!app) return void 0;
+  for (const key of ["relay", "deviceId", "senderId", "token", "name"]) if (typeof app[key] !== "string") return void 0;
+  return {
+    relay: app.relay,
+    deviceId: app.deviceId,
+    senderId: app.senderId,
+    token: app.token,
+    name: app.name,
+    pairedAt: typeof app.pairedAt === "number" ? app.pairedAt : 0
+  };
+}
 function loadConfig(home) {
   const path = configPath(home);
   if (!existsSync(path)) return null;
@@ -38,14 +56,17 @@ function loadConfig(home) {
     throw new ConfigError(`${path} isn't valid JSON. Fix it, or run \`code-alarm init --force\` to start over.`);
   }
   const config = raw;
-  const ntfy = config.ntfy;
-  if (config.transport !== "ntfy" || !ntfy || typeof ntfy.server !== "string" || typeof ntfy.topic !== "string") {
-    throw new ConfigError(`${path} is missing its ntfy settings. Run \`code-alarm init --force\`.`);
-  }
-  return { version: 1, transport: "ntfy", ntfy: { server: ntfy.server, topic: ntfy.topic, ...ntfy.token ? { token: ntfy.token } : {} } };
+  const ntfy = readNtfy(config.ntfy);
+  const app = readApp(config.app);
+  if (config.transport === "app" && app) return { version: 1, transport: "app", app, ...ntfy ? { ntfy } : {} };
+  if (config.transport === "ntfy" && ntfy) return { version: 1, transport: "ntfy", ntfy, ...app ? { app } : {} };
+  throw new ConfigError(`${path} is missing its ${config.transport === "app" ? "pairing" : "ntfy"} settings. Run \`code-alarm init --force\` or \`code-alarm pair\`.`);
 }
 function saveConfig(home, config) {
   writeFileAtomic(configPath(home), JSON.stringify(config, null, 2) + "\n", 384);
+}
+function removeConfig(home) {
+  rmSync(configPath(home), { force: true });
 }
 function newTopic() {
   const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -56,6 +77,152 @@ function newTopic() {
 }
 function isValidTopic(topic) {
   return /^[A-Za-z0-9_-]{1,64}$/.test(topic);
+}
+
+// src/app.ts
+var DEFAULT_RELAY = null;
+var RELAY_ENV = "CODE_ALARM_RELAY";
+var LOCAL_HOSTS = /* @__PURE__ */ new Set(["127.0.0.1", "localhost", "[::1]"]);
+function relayUrl(given, env = process.env) {
+  const raw = given ?? env[RELAY_ENV] ?? DEFAULT_RELAY;
+  if (!raw) throw new ConfigError("The Code Alarm relay isn't public yet. Pass --relay <url> if you were given one.");
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new ConfigError(`${raw} isn't a URL.`);
+  }
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && LOCAL_HOSTS.has(url.hostname))) {
+    throw new ConfigError("The relay must be an https:// address: the token travels with every request.");
+  }
+  if (url.search || url.hash || url.username || url.password) throw new ConfigError("The relay address takes no query, fragment or credentials.");
+  return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+}
+function defaultName(platform = process.platform) {
+  return platform === "win32" ? "Windows PC" : platform === "darwin" ? "Mac" : platform === "linux" ? "Linux computer" : "Computer";
+}
+var TIMEOUT_MS = 1e4;
+async function call(request, fetchImpl, timeoutMs) {
+  const res = await fetchImpl(request.url, { ...request.init, signal: AbortSignal.timeout(timeoutMs) });
+  const text = await res.text().catch(() => "");
+  let body = {};
+  try {
+    const parsed = text ? JSON.parse(text) : {};
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) body = parsed;
+  } catch {
+  }
+  return { status: res.status, body };
+}
+var message = (answer) => typeof answer.body.message === "string" ? answer.body.message : `the relay answered HTTP ${answer.status}`;
+function pairRequest(relay, code, name) {
+  return {
+    url: `${relay}/v1/pair`,
+    init: { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, name }) }
+  };
+}
+async function pairWithPhone(relay, code, name, now, fetchImpl = fetch) {
+  let answer;
+  try {
+    answer = await call(pairRequest(relay, code, name), fetchImpl, TIMEOUT_MS);
+  } catch (e) {
+    return { ok: false, message: `couldn't reach the relay at ${relay} (${e instanceof Error ? e.name : "error"})` };
+  }
+  const { sender_id, token, device_id, name: listedAs } = answer.body;
+  if (answer.status !== 201 || typeof sender_id !== "string" || typeof token !== "string" || typeof device_id !== "string") {
+    return { ok: false, message: message(answer) };
+  }
+  return {
+    ok: true,
+    app: { relay, deviceId: device_id, senderId: sender_id, token, name: typeof listedAs === "string" ? listedAs : name, pairedAt: now }
+  };
+}
+function appRequest(event, app) {
+  return {
+    url: `${app.relay}/v1/events`,
+    init: {
+      method: "POST",
+      headers: { authorization: `Bearer ${app.token}`, "content-type": "application/json" },
+      body: JSON.stringify(event)
+    }
+  };
+}
+async function sendApp(event, app, fetchImpl = fetch, options = {}) {
+  const { timeoutMs = TIMEOUT_MS, retryDelayMs = 3e3 } = options;
+  let result = { ok: false, detail: "not sent" };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await new Promise((done) => setTimeout(done, retryDelayMs));
+    let answer;
+    try {
+      answer = await call(appRequest(event, app), fetchImpl, timeoutMs);
+    } catch (e) {
+      result = { ok: false, detail: `relay unreachable (${e instanceof Error ? e.name : "error"})` };
+      continue;
+    }
+    if (answer.status === 200 && answer.body.status === "duplicate") return { ok: true, detail: "app: already sent" };
+    if (answer.status === 200) {
+      return { ok: true, detail: answer.body.limited ? "app: sent as a notification (rate limit)" : "app: sent" };
+    }
+    if (answer.status === 401) return { ok: false, detail: "this computer isn't paired any more: run `code-alarm pair`" };
+    result = { ok: false, detail: `app: ${typeof answer.body.error === "string" ? answer.body.error : `HTTP ${answer.status}`}` };
+    if (answer.status !== 502) return result;
+  }
+  return result;
+}
+async function unpairFromPhone(app, fetchImpl = fetch) {
+  try {
+    const answer = await call(
+      { url: `${app.relay}/v1/senders/${encodeURIComponent(app.senderId)}`, init: { method: "DELETE", headers: { authorization: `Bearer ${app.token}` } } },
+      fetchImpl,
+      TIMEOUT_MS
+    );
+    if (answer.status === 204) return { ok: true, detail: "removed" };
+    if (answer.status === 401 || answer.status === 404) return { ok: true, detail: "already removed" };
+    return { ok: false, detail: message(answer) };
+  } catch (e) {
+    return { ok: false, detail: `couldn't reach the relay (${e instanceof Error ? e.name : "error"})` };
+  }
+}
+async function fetchDelivery(app, id, fetchImpl = fetch) {
+  try {
+    const answer = await call(
+      { url: `${app.relay}/v1/events/${encodeURIComponent(id)}`, init: { method: "GET", headers: { authorization: `Bearer ${app.token}` } } },
+      fetchImpl,
+      TIMEOUT_MS
+    );
+    if (answer.status !== 200 || typeof answer.body.status !== "string" || typeof answer.body.sent_at !== "number") {
+      return { ok: false, message: answer.status === 404 ? "the relay has no record of it (it keeps a week)" : message(answer) };
+    }
+    return { ok: true, delivery: answer.body };
+  } catch (e) {
+    return { ok: false, message: `couldn't reach the relay (${e instanceof Error ? e.name : "error"})` };
+  }
+}
+var seconds = (ms) => `${(Math.max(0, ms) / 1e3).toFixed(1)} s`;
+function describeDelivery(d) {
+  const rang = d.ringing_at ? `${seconds(d.ringing_at - d.sent_at)} after the alert was sent` : "";
+  switch (d.status) {
+    case "sending":
+    case "sent":
+      return "sent to the phone; it hasn't answered yet (it may be off, or offline)";
+    case "failed":
+      return `not delivered${d.detail ? `: ${d.detail}` : ""}`;
+    case "received":
+      return "received by the phone";
+    case "ringing":
+      return `ringing, ${rang}`;
+    case "notified":
+      return `shown as a notification, ${rang}`;
+    case "snoozed":
+      return `snoozed; it rang ${rang}`;
+    case "stopped":
+      return `rang ${rang}${d.ended_at && d.ringing_at ? `, stopped after ${seconds(d.ended_at - d.ringing_at)}` : ""}`;
+    case "expired":
+      return "the phone got it after it expired, so it stayed silent";
+    case "duplicate":
+      return "the phone had already had it, so it stayed silent";
+    default:
+      return d.status;
+  }
 }
 
 // src/deliver.ts
@@ -158,10 +325,27 @@ function recentLog(home, count) {
 }
 async function sendNow(home, event, fetchImpl) {
   const config = loadConfig(home);
-  if (!config) return { ok: false, detail: "not set up: run `code-alarm init`" };
-  const result = await sendNtfy(event, config.ntfy, fetchImpl);
+  if (!config) return { ok: false, detail: "not set up: run `code-alarm init` or `code-alarm pair`" };
+  const result = config.transport === "app" && config.app ? await sendApp(event, config.app, fetchImpl) : await sendNtfy(event, config.ntfy, fetchImpl);
   logLine(home, `${event.kind}/${event.level} ${event.agent} "${event.label}" ${result.ok ? "sent" : "FAILED"} (${result.detail})`);
+  if (result.ok && config.transport === "app") rememberLast(home, event);
   return result;
+}
+var lastPath = (home) => join2(home, "last-event.json");
+function rememberLast(home, event) {
+  try {
+    const last = { id: event.id, kind: event.kind, level: event.level, label: event.label, sentAt: event.sent_at };
+    writeFileAtomic(lastPath(home), JSON.stringify(last));
+  } catch {
+  }
+}
+function lastEvent(home) {
+  try {
+    const last = JSON.parse(readFileSync2(lastPath(home), "utf8"));
+    return typeof last.id === "string" && typeof last.sentAt === "number" ? last : null;
+  } catch {
+    return null;
+  }
 }
 function sendDetached(event, script = process.argv[1]) {
   const payload = Buffer.from(JSON.stringify(event)).toString("base64url");
@@ -218,7 +402,7 @@ import { resolve as resolve2 } from "node:path";
 
 // src/state.ts
 import { createHash as createHash2 } from "node:crypto";
-import { closeSync, existsSync as existsSync2, linkSync, mkdirSync as mkdirSync3, openSync, readdirSync, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, statSync as statSync2 } from "node:fs";
+import { closeSync, existsSync as existsSync2, linkSync, mkdirSync as mkdirSync3, openSync, readdirSync, readFileSync as readFileSync3, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync2 } from "node:fs";
 import { isAbsolute, join as join3, relative, resolve } from "node:path";
 var NAP_KEY = "nap";
 function normalize(dir, platform = process.platform) {
@@ -248,7 +432,7 @@ function startFresh(home, key) {
   clearSignaled(home, key);
   const dir = join3(home, "sent");
   if (!existsSync2(dir)) return;
-  for (const file of readdirSync(dir)) if (file.startsWith(`${key}-`)) rmSync(join3(dir, file), { force: true });
+  for (const file of readdirSync(dir)) if (file.startsWith(`${key}-`)) rmSync2(join3(dir, file), { force: true });
 }
 function listArmings(home, now) {
   const dir = armedDir(home);
@@ -260,12 +444,12 @@ function listArmings(home, now) {
     try {
       const arming = JSON.parse(readFileSync3(path, "utf8"));
       if (typeof arming.until !== "number" || arming.until <= now) {
-        rmSync(path, { force: true });
+        rmSync2(path, { force: true });
         continue;
       }
       found.push({ ...arming, key: file.slice(0, -".json".length) });
     } catch {
-      rmSync(path, { force: true });
+      rmSync2(path, { force: true });
     }
   }
   return found;
@@ -291,7 +475,7 @@ function claim(home, arming) {
     renameSync2(path, claimed);
   } catch (e) {
     if (e.code === "ENOENT") return false;
-    rmSync(path, { force: true });
+    rmSync2(path, { force: true });
     return true;
   }
   try {
@@ -301,12 +485,12 @@ function claim(home, arming) {
         linkSync(claimed, path);
       } catch {
       }
-      rmSync(claimed, { force: true });
+      rmSync2(claimed, { force: true });
       return false;
     }
   } catch {
   }
-  rmSync(claimed, { force: true });
+  rmSync2(claimed, { force: true });
   return true;
 }
 function claimEvent(home, id, now) {
@@ -316,7 +500,7 @@ function claimEvent(home, id, now) {
     for (const file of readdirSync(dir)) {
       try {
         const path = join3(dir, file);
-        if (now - statSync2(path).mtimeMs > 24 * 60 * 6e4) rmSync(path, { force: true });
+        if (now - statSync2(path).mtimeMs > 24 * 60 * 6e4) rmSync2(path, { force: true });
       } catch {
       }
     }
@@ -329,14 +513,14 @@ function claimEvent(home, id, now) {
 function disarmProject(home, dir) {
   const path = join3(armedDir(home), `${keyFor(dir)}.json`);
   const existed = existsSync2(path);
-  rmSync(path, { force: true });
+  rmSync2(path, { force: true });
   return existed;
 }
 function disarmAll(home) {
   const dir = armedDir(home);
   if (!existsSync2(dir)) return 0;
   const files = readdirSync(dir).filter((file) => file.endsWith(".json"));
-  for (const file of files) rmSync(join3(dir, file), { force: true });
+  for (const file of files) rmSync2(join3(dir, file), { force: true });
   return files.length;
 }
 function signalKey(armingKey, sessionId) {
@@ -357,7 +541,7 @@ function signaledKind(home, key) {
   }
 }
 function clearSignaled(home, key) {
-  rmSync(signalFile(home, key), { force: true });
+  rmSync2(signalFile(home, key), { force: true });
 }
 var pendingFile = (home, id) => join3(home, "pending", `${id}.json`);
 var sessionPrefix = (sessionId) => `${signalKey("", sessionId)}-`;
@@ -372,7 +556,7 @@ function takePending(home, id, at) {
   try {
     const pending = JSON.parse(readFileSync3(path, "utf8"));
     if (pending.at !== at) return null;
-    rmSync(path, { force: true });
+    rmSync2(path, { force: true });
     return pending;
   } catch {
     return null;
@@ -381,14 +565,14 @@ function takePending(home, id, at) {
 function clearPending(home, id) {
   const path = pendingFile(home, id);
   const existed = existsSync2(path);
-  rmSync(path, { force: true });
+  rmSync2(path, { force: true });
   return existed;
 }
 function clearSessionPending(home, sessionId) {
   const dir = join3(home, "pending");
   if (!existsSync2(dir)) return;
   const prefix = sessionPrefix(sessionId);
-  for (const file of readdirSync(dir)) if (file.startsWith(prefix)) rmSync(join3(dir, file), { force: true });
+  for (const file of readdirSync(dir)) if (file.startsWith(prefix)) rmSync2(join3(dir, file), { force: true });
 }
 function rateLimited(home, key, kind, now, windowMs) {
   const path = sentFile(home, key, kind);
@@ -659,7 +843,7 @@ function sessionFromEnv(agent, env) {
 }
 
 // src/install.ts
-import { copyFileSync, existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync4, rmdirSync, rmSync as rmSync2 } from "node:fs";
+import { copyFileSync, existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync4, rmdirSync, rmSync as rmSync3 } from "node:fs";
 import { dirname as dirname2, join as join4 } from "node:path";
 
 // src/skill.ts
@@ -769,7 +953,7 @@ function removeOurs(path, mark, notes) {
     notes.push(`Left ${path} alone: code-alarm didn't write it`);
     return;
   }
-  rmSync2(path, { force: true });
+  rmSync3(path, { force: true });
   notes.push(`Removed ${path}`);
 }
 function installCodex(args) {
@@ -814,7 +998,7 @@ function uninstallCodex(args) {
     rmdirSync(paths.skillDir);
   } catch {
   }
-  rmSync2(paths.cli, { force: true });
+  rmSync3(paths.cli, { force: true });
   return notes;
 }
 function codexInstalled(alarmHome2, userHome) {
@@ -846,13 +1030,20 @@ Setup
   code-alarm test [--notify]     Ring the phone now (or send a plain notification)
   code-alarm install codex       Add Code Alarm's hooks and skill to Codex (uninstall codex removes them)
 
+The Code Alarm app (in testing)
+  code-alarm pair <code> [--name NAME] [--relay URL]
+                                 Pair with the code the app shows; alerts then go through the app
+  code-alarm unpair              Remove this computer from the phone
+  code-alarm use ntfy|app        Switch between ntfy and the app when both are set up
+
 Arming (only armed work rings)
   code-alarm arm [--for 12h] [--notify]
                                  Ring when the agent in this folder next finishes, stops or needs you
   code-alarm nap <2h> [--notify] Ring for every session until the time is up
                                  --notify: one ordinary notification instead of the alarm
   code-alarm disarm [--all]      Cancel arming for this folder (or everything)
-  code-alarm status              What's set up, what's armed, the last alerts
+  code-alarm status [--last]     What's set up, what's armed, the last alerts
+                                 --last: what the phone did with the last alert (app only)
 
 Run by the agent (its skill says when)
   code-alarm done | needs-you | failed
@@ -933,8 +1124,13 @@ async function main(argv) {
         args: rest,
         options: { server: { type: "string" }, topic: { type: "string" }, token: { type: "string" }, force: { type: "boolean" } }
       });
-      const existing = values.force ? null : loadConfig(home);
-      if (existing) {
+      let existing = null;
+      try {
+        existing = loadConfig(home);
+      } catch (e) {
+        if (!values.force) throw e;
+      }
+      if (existing?.ntfy && !values.force) {
         console.log(`Already set up: ntfy topic ${existing.ntfy.topic} on ${existing.ntfy.server}.`);
         console.log("Run `code-alarm init --force` to start over with a new topic.");
         return 0;
@@ -942,7 +1138,10 @@ async function main(argv) {
       const topic = values.topic ?? newTopic();
       if (!isValidTopic(topic)) throw new ConfigError("A topic can only use letters, digits, - and _ (at most 64).");
       const server = (values.server ?? DEFAULT_NTFY_SERVER).replace(/\/+$/, "");
-      saveConfig(home, { version: 1, transport: "ntfy", ntfy: { server, topic, ...values.token ? { token: values.token } : {} } });
+      const ntfy = { server, topic, ...values.token ? { token: values.token } : {} };
+      const app = existing?.app;
+      saveConfig(home, app ? { version: 1, transport: "app", app, ntfy } : { version: 1, transport: "ntfy", ntfy });
+      if (app) console.log("This computer is paired with the Code Alarm app, which still sends: `code-alarm use ntfy` switches to ntfy.\n");
       console.log(`Code Alarm is set up.
 
   Server: ${server}
@@ -1016,13 +1215,14 @@ Then connect your agent:
       return 0;
     }
     case "status": {
+      const { values } = parseArgs({ args: rest, options: { last: { type: "boolean" } } });
       const config = loadConfig(home);
-      console.log(
-        config ? (
-          // Never any part of the topic: people paste this output into bug reports.
-          `Transport: ntfy, ${config.ntfy.server}, topic set${config.ntfy.token ? ", with a token" : ""}`
-        ) : "Not set up: run `code-alarm init`."
-      );
+      if (!config) console.log("Not set up: run `code-alarm init`.");
+      else if (config.transport === "app" && config.app) {
+        console.log(`Transport: Code Alarm app, paired as "${config.app.name}" through ${config.app.relay}${config.ntfy ? " (ntfy is set up too)" : ""}`);
+      } else if (config.ntfy) {
+        console.log(`Transport: ntfy, ${config.ntfy.server}, topic set${config.ntfy.token ? ", with a token" : ""}${config.app ? " (paired with the app too)" : ""}`);
+      }
       const now = Date.now();
       const armings = listArmings(home, now);
       console.log(armings.length ? "Armed:" : "Nothing is armed.");
@@ -1035,6 +1235,16 @@ Then connect your agent:
       const log = recentLog(home, 5);
       if (log.length) console.log(`Last activity:
 ${log.map((line) => `  ${line}`).join("\n")}`);
+      if (values.last) {
+        const last = lastEvent(home);
+        if (config?.transport !== "app" || !config.app) console.log("Last alert: --last needs the Code Alarm app; ntfy doesn't report back.");
+        else if (!last) console.log("Last alert: none sent through the app yet.");
+        else {
+          const result = await fetchDelivery(config.app, last.id);
+          const what = `${last.kind}/${last.level} "${last.label}" at ${clock(last.sentAt)}`;
+          console.log(`Last alert: ${what}: ${result.ok ? describeDelivery(result.delivery) : `unknown, ${result.message}`}`);
+        }
+      }
       return 0;
     }
     case "done":
@@ -1044,6 +1254,60 @@ ${log.map((line) => `  ${line}`).join("\n")}`);
       const agent = detectAgent(process.env);
       const result = await runSignal(kind, agent, deps, sessionFromEnv(agent, process.env));
       console.log(result.message);
+      return 0;
+    }
+    case "pair": {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { name: { type: "string" }, relay: { type: "string" } }
+      });
+      const code = positionals[0];
+      if (!code) throw new ConfigError('Usage: code-alarm pair <code> [--name "My laptop"]. The code is in the Code Alarm app on your phone.');
+      const relay = relayUrl(values.relay);
+      const name = values.name?.trim() || defaultName();
+      let existing = null;
+      try {
+        existing = loadConfig(home);
+      } catch {
+      }
+      const result = await pairWithPhone(relay, code, name, Date.now());
+      if (!result.ok) {
+        console.log(`Couldn't pair: ${result.message}`);
+        return 1;
+      }
+      if (existing?.app && existing.app.senderId !== result.app.senderId) await unpairFromPhone(existing.app);
+      saveConfig(home, { version: 1, transport: "app", app: result.app, ...existing?.ntfy ? { ntfy: existing.ntfy } : {} });
+      console.log(`Paired. Your phone lists this computer as "${result.app.name}", and alerts now go through the Code Alarm app.`);
+      if (existing?.ntfy) console.log("Your ntfy settings are kept: `code-alarm use ntfy` switches back.");
+      console.log("Check it with: code-alarm test");
+      return 0;
+    }
+    case "unpair": {
+      const config = loadConfig(home);
+      if (!config?.app) {
+        console.log("This computer isn't paired with the Code Alarm app.");
+        return 0;
+      }
+      const result = await unpairFromPhone(config.app);
+      if (config.ntfy) saveConfig(home, { version: 1, transport: "ntfy", ntfy: config.ntfy });
+      else removeConfig(home);
+      console.log(
+        result.ok ? "Unpaired: the phone no longer lists this computer." : `Unpaired here, but the relay didn't hear it (${result.detail}). Remove this computer in the app too.`
+      );
+      console.log(config.ntfy ? "Alerts go through ntfy again." : "Nothing is set up now: `code-alarm pair <code>` or `code-alarm init` sets it up again.");
+      return 0;
+    }
+    case "use": {
+      const target = rest[0];
+      if (target !== "ntfy" && target !== "app") throw new ConfigError("Usage: code-alarm use ntfy|app");
+      const config = loadConfig(home);
+      if (!config?.[target]) {
+        console.log(target === "app" ? "Not paired with the app: run `code-alarm pair <code>`." : "ntfy isn't set up: run `code-alarm init`.");
+        return 1;
+      }
+      saveConfig(home, { ...config, transport: target });
+      console.log(`Alerts now go through ${target === "app" ? "the Code Alarm app" : "ntfy"}.`);
       return 0;
     }
     case "install":

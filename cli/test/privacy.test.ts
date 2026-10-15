@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { appRequest, defaultName, pairRequest } from "../src/app.js";
 import { HOUR } from "../src/duration.js";
 import { EVENT_FIELDS, buildEvent, labelFor } from "../src/events.js";
 import { runHook } from "../src/hook.js";
@@ -61,4 +63,22 @@ test("buildEvent keeps the label short even when given a long one", () => {
   const event = buildEvent({ kind: "done", label: "x".repeat(200), agent: "cli", now: 0 });
   assert.equal(event.label.length, 40);
   assert.equal(event.expires_at - event.sent_at, 30 * 60_000);
+});
+
+test("nothing from the hook payload reaches the relay request either", async () => {
+  const { home, project, sent, clock, deps } = setup();
+  armProject(home, project, clock.now + HOUR, clock.now);
+  await runHook("claude", payload("Stop", { cwd: project }), deps());
+  const app = { relay: "https://relay.example", deviceId: "d_1", senderId: "s_1", token: "cas_t", name: "PC", pairedAt: 0 };
+  const { url, init } = appRequest(sent[0]!, app);
+  assert.deepEqual(Object.keys(JSON.parse(init.body!)).sort(), [...EVENT_FIELDS].sort());
+  assert.deepEqual(Object.keys(init.headers).sort(), ["authorization", "content-type"]);
+  const request = url + JSON.stringify(init);
+  for (const secret of SECRETS) assert.ok(!request.includes(secret), `relay request leaks ${secret}`);
+});
+
+test("pairing sends the code and a name, never the hostname", () => {
+  const { init } = pairRequest("https://relay.example", "K7Q-4MZ", defaultName());
+  assert.deepEqual(Object.keys(JSON.parse(init.body!)).sort(), ["code", "name"]);
+  assert.ok(!init.body!.includes(hostname()), "the hostname would leave the computer");
 });
