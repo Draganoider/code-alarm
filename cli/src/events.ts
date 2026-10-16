@@ -21,7 +21,8 @@ export const KINDS = ["done", "needs_input", "failed", "stopped", "test"] as con
 export type Kind = (typeof KINDS)[number];
 export const LEVELS = ["alarm", "notify"] as const;
 export type Level = (typeof LEVELS)[number];
-export type Agent = "claude-code" | "codex" | "cli";
+export const AGENTS = ["claude-code", "codex", "cli"] as const;
+export type Agent = (typeof AGENTS)[number];
 
 export const DEFAULT_TTL_MS = 30 * 60_000;
 export const MAX_LABEL = 40;

@@ -1,0 +1,296 @@
+{
+  "about": "Examples of protocol version 1 events (docs/protocol.md), checked by both sides: the CLI's tests (cli/test/protocol.test.ts) and the Code Alarm relay's. 'now' is the clock to check them against. 'status' is the relay's HTTP answer to an invalid event.",
+  "now": 1800000000000,
+  "valid": [
+    {
+      "v": 1,
+      "id": "6f1c2a9e-4b7d-8e21-a0c3-5d9f1e2b7c44",
+      "kind": "done",
+      "level": "alarm",
+      "label": "my-project",
+      "agent": "claude-code",
+      "sent_at": 1800000000000,
+      "expires_at": 1800001800000
+    },
+    {
+      "v": 1,
+      "id": "0a1b2c3d-0000-4000-8000-000000000001",
+      "kind": "needs_input",
+      "level": "notify",
+      "label": "billing.api_v2",
+      "agent": "codex",
+      "sent_at": 1800000000000,
+      "expires_at": 1800001800000
+    },
+    {
+      "v": 1,
+      "id": "0a1b2c3d-0000-4000-8000-000000000002",
+      "kind": "failed",
+      "level": "alarm",
+      "label": "my app 2",
+      "agent": "cli",
+      "sent_at": 1800000000000,
+      "expires_at": 1800001800000
+    },
+    {
+      "v": 1,
+      "id": "0a1b2c3d-0000-4000-8000-000000000003",
+      "kind": "stopped",
+      "level": "alarm",
+      "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "agent": "codex",
+      "sent_at": 1800000000000,
+      "expires_at": 1800001800000
+    },
+    {
+      "v": 1,
+      "id": "0a1b2c3d-0000-4000-8000-000000000004",
+      "kind": "test",
+      "level": "alarm",
+      "label": "test",
+      "agent": "cli",
+      "sent_at": 1800000000000,
+      "expires_at": 1800003600000
+    }
+  ],
+  "invalid": [
+    {
+      "why": "a field outside the protocol (cwd)",
+      "status": 400,
+      "event": {
+        "v": 1,
+        "id": "6f1c2a9e-4b7d-8e21-a0c3-5d9f1e2b7c44",
+        "kind": "done",
+        "level": "alarm",
+        "label": "my-project",
+        "agent": "claude-code",
+        "sent_at": 1800000000000,
+        "expires_at": 1800001800000,
+        "cwd": "C:\\work\\secret"
+      }
+    },
+    {
+      "why": "a field outside the protocol (last_assistant_message)",
+      "status": 400,
+      "event": {
+        "v": 1,
+        "id": "6f1c2a9e-4b7d-8e21-a0c3-5d9f1e2b7c44",
+        "kind": "done",
+        "level": "alarm",
+        "label": "my-project",
+        "agent": "claude-code",
+        "sent_at": 1800000000000,
+        "expires_at": 1800001800000,
+        "last_assistant_message": "the answer is 42"
+      }
+    },
+    {
+      "why": "a Windows path as the label",
+      "status": 400,
+      "event": {
+        "v": 1,
+        "id": "6f1c2a9e-4b7d-8e21-a0c3-5d9f1e2b7c44",
+        "kind": "done",
+        "level": "alarm",
+        "label": "C:\\Users\\me\\project",
+        "agent": "claude-code",
+        "sent_at": 1800000000000,
+        "expires_at": 1800001800000
+      }
+    },
+    {
+      "why": "a Unix path as the label",
+      "status": 400,
+      "event": {
+        "v": 1,
+        "id": "6f1c2a9e-4b7d-8e21-a0c3-5d9f1e2b7c44",
+        "kind": "done",
+        "level": "alarm",
+        "label": "/home/me/project",
+        "agent": "claude-code",
+        "sent_at": 1800000000000,
+        "expires_at": 1800001800000
+      }
+    },
+    {
+      "why": "a label over 40 characters",
+      "status": 400,
+      "event": {
+        "v": 1,
+        "id": "6f1c2a9e-4b7d-8e21-a0c3-5d9f1e2b7c44",
+        "kind": "done",
+        "level": "alarm",
+        "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "agent": "claude-code",
+        "sent_at": 1800000000000,
+        "expires_at": 1800001800000
+      }
+    },
+    {
+      "why": "an unknown kind",
+      "status": 400,
+      "event": {
+        "v": 1,
+        "id": "6f1c2a9e-4b7d-8e21-a0c3-5d9f1e2b7c44",
+        "kind": "custom",
+        "level": "alarm",
+        "label": "my-project",
+        "agent": "claude-code",
+        "sent_at": 1800000000000,
+        "expires_at": 1800001800000
+      }
+    },
+    {
+      "why": "an unknown level",
+      "status": 400,
+      "event": {
+        "v": 1,
+        "id": "6f1c2a9e-4b7d-8e21-a0c3-5d9f1e2b7c44",
+        "kind": "done",
+        "level": "loud",
+        "label": "my-project",
+        "agent": "claude-code",
+        "sent_at": 1800000000000,
+        "expires_at": 1800001800000
+      }
+    },
+    {
+      "why": "an unknown agent",
+      "status": 400,
+      "event": {
+        "v": 1,
+        "id": "6f1c2a9e-4b7d-8e21-a0c3-5d9f1e2b7c44",
+        "kind": "done",
+        "level": "alarm",
+        "label": "my-project",
+        "agent": "cursor",
+        "sent_at": 1800000000000,
+        "expires_at": 1800001800000
+      }
+    },
+    {
+      "why": "another protocol version",
+      "status": 400,
+      "event": {
+        "v": 2,
+        "id": "6f1c2a9e-4b7d-8e21-a0c3-5d9f1e2b7c44",
+        "kind": "done",
+        "level": "alarm",
+        "label": "my-project",
+        "agent": "claude-code",
+        "sent_at": 1800000000000,
+        "expires_at": 1800001800000
+      }
+    },
+    {
+      "why": "no id",
+      "status": 400,
+      "event": {
+        "v": 1,
+        "kind": "done",
+        "level": "alarm",
+        "label": "my-project",
+        "agent": "claude-code",
+        "sent_at": 1800000000000,
+        "expires_at": 1800001800000
+      }
+    },
+    {
+      "why": "no label",
+      "status": 400,
+      "event": {
+        "v": 1,
+        "id": "0a1b2c3d-0000-4000-8000-0000000000ff",
+        "kind": "done",
+        "level": "alarm",
+        "agent": "claude-code",
+        "sent_at": 1800000000000,
+        "expires_at": 1800001800000
+      }
+    },
+    {
+      "why": "a timestamp as a string",
+      "status": 400,
+      "event": {
+        "v": 1,
+        "id": "6f1c2a9e-4b7d-8e21-a0c3-5d9f1e2b7c44",
+        "kind": "done",
+        "level": "alarm",
+        "label": "my-project",
+        "agent": "claude-code",
+        "sent_at": "1800000000000",
+        "expires_at": 1800001800000
+      }
+    },
+    {
+      "why": "timestamps in seconds, not milliseconds",
+      "status": 400,
+      "event": {
+        "v": 1,
+        "id": "6f1c2a9e-4b7d-8e21-a0c3-5d9f1e2b7c44",
+        "kind": "done",
+        "level": "alarm",
+        "label": "my-project",
+        "agent": "claude-code",
+        "sent_at": 1800000000,
+        "expires_at": 1800001800
+      }
+    },
+    {
+      "why": "a lifetime over an hour",
+      "status": 400,
+      "event": {
+        "v": 1,
+        "id": "6f1c2a9e-4b7d-8e21-a0c3-5d9f1e2b7c44",
+        "kind": "done",
+        "level": "alarm",
+        "label": "my-project",
+        "agent": "claude-code",
+        "sent_at": 1800000000000,
+        "expires_at": 1800003660000
+      }
+    },
+    {
+      "why": "expiring before it was sent",
+      "status": 400,
+      "event": {
+        "v": 1,
+        "id": "6f1c2a9e-4b7d-8e21-a0c3-5d9f1e2b7c44",
+        "kind": "done",
+        "level": "alarm",
+        "label": "my-project",
+        "agent": "claude-code",
+        "sent_at": 1800000000000,
+        "expires_at": 1799999999999
+      }
+    },
+    {
+      "why": "sent more than 5 minutes in the future",
+      "status": 400,
+      "event": {
+        "v": 1,
+        "id": "6f1c2a9e-4b7d-8e21-a0c3-5d9f1e2b7c44",
+        "kind": "done",
+        "level": "alarm",
+        "label": "my-project",
+        "agent": "claude-code",
+        "sent_at": 1800000600000,
+        "expires_at": 1800001200000
+      }
+    },
+    {
+      "why": "already expired",
+      "status": 410,
+      "event": {
+        "v": 1,
+        "id": "6f1c2a9e-4b7d-8e21-a0c3-5d9f1e2b7c44",
+        "kind": "done",
+        "level": "alarm",
+        "label": "my-project",
+        "agent": "claude-code",
+        "sent_at": 1799998140000,
+        "expires_at": 1799999940000
+      }
+    }
+  ]
+}

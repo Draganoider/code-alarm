@@ -19,6 +19,10 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
   - `pair` uses the Code Alarm relay at `https://relay.codealarm.workers.dev`; `--relay` or
     `CODE_ALARM_RELAY` points it at another one, such as a local test relay.
 
+- `docs/protocol-examples.json`: valid and invalid events, the contract the CLI and the Code Alarm
+  relay both test against. `protocol.md` now states the rules exactly: the label's characters, the
+  ID's form, the one-hour lifetime and the clock skew the relay allows.
+
 ## [0.1.0] — 2026-10-14
 
 ### Added

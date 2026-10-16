@@ -22,12 +22,15 @@ computer: no prompts, code, file paths, transcripts or assistant messages. A tes
 | Field | Meaning |
 |---|---|
 | `v` | Protocol version, `1` |
-| `id` | Hook events: derived from the agent, session, turn and kind, so a hook that fires twice for the same turn produces the same ID. Explicit signals: random |
+| `id` | 8 to 64 letters, digits and dashes; the CLI sends a UUID. Hook events: derived from the agent, session, turn and kind, so a hook that fires twice for the same turn produces the same ID. Explicit signals: random |
 | `kind` | `done`, `needs_input`, `failed`, `stopped` or `test` |
 | `level` | `alarm`: loud, repeating, through Do Not Disturb (the default). `notify`: one normal notification that pops up with sound and vibration, following the phone's sound settings. It comes from how the work was armed (`--notify`) |
-| `label` | The armed project folder's **name**: plain characters only, at most 40, never a path |
+| `label` | The armed project folder's **name**, never a path: at most 40 of `A–Z a–z 0–9 . _ -` and spaces |
 | `agent` | `claude-code`, `codex` or `cli` |
-| `sent_at`, `expires_at` | Milliseconds since the epoch. Events live 30 minutes; a receiver must ignore an expired one |
+| `sent_at`, `expires_at` | Milliseconds since the epoch. Events live 30 minutes, and never more than an hour; a receiver must ignore an expired one, and the relay refuses a `sent_at` more than 5 minutes ahead of its clock |
+
+Every field is required, and no other field is allowed. [`protocol-examples.json`](protocol-examples.json)
+has valid and invalid examples. The CLI's tests check its events against them, and so do the relay's.
 
 ## When an event is sent
 
