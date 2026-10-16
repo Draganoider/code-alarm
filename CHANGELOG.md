@@ -6,6 +6,8 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-10-16
+
 ### Added
 
 - The Code Alarm app transport, for the Android app now in testing:
