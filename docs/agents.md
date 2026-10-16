@@ -52,7 +52,9 @@ Docs: [hooks](https://learn.chatgpt.com/docs/hooks),
     shape as Claude Code.
   - **On by default, but every hook must be trusted before it runs.** Trust is tied to the
     hook's exact command, so a changed command is skipped until it's trusted again. That's why
-    `code-alarm install codex` points the hooks at a fixed copy of the CLI, which updates in place.
+    `code-alarm install codex` points the hooks at a fixed copy of the CLI, which updates in place:
+    `status` reports a copy that differs from the running CLI, and `init`, `pair`, `unpair` and
+    `use` refresh it, since an old copy can't read newer settings and fails silently.
   - `async: true` runs a hook in the background, so it can't block or decide anything. We use it
     for all four hooks.
   - A hook that exits normally may leave detached helpers running: on Windows, Codex runs each hook

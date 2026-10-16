@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { sendApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { type AlarmEvent, EVENT_FIELDS, KINDS } from "./events.js";
 import { writeFileAtomic } from "./fsutil.js";
@@ -34,10 +35,42 @@ export function recentLog(home: string, count: number): string[] {
 /** Sends and waits for the answer: for `code-alarm test`, and inside the detached sender. */
 export async function sendNow(home: string, event: AlarmEvent, fetchImpl?: typeof fetch): Promise<SendResult> {
   const config = loadConfig(home);
-  if (!config) return { ok: false, detail: "not set up: run `code-alarm init`" };
-  const result = await sendNtfy(event, config.ntfy, fetchImpl);
+  if (!config) return { ok: false, detail: "not set up: run `code-alarm init` or `code-alarm pair`" };
+  // One transport, never both: two would ring twice.
+  const result =
+    config.transport === "app" && config.app ? await sendApp(event, config.app, fetchImpl) : await sendNtfy(event, config.ntfy!, fetchImpl);
   logLine(home, `${event.kind}/${event.level} ${event.agent} "${event.label}" ${result.ok ? "sent" : "FAILED"} (${result.detail})`);
+  if (result.ok && config.transport === "app") rememberLast(home, event);
   return result;
+}
+
+export interface LastEvent {
+  id: string;
+  kind: string;
+  level: string;
+  label: string;
+  sentAt: number;
+}
+
+const lastPath = (home: string) => join(home, "last-event.json");
+
+/** The last event sent through the app, for `status --last`. It stays on this computer. */
+function rememberLast(home: string, event: AlarmEvent): void {
+  try {
+    const last: LastEvent = { id: event.id, kind: event.kind, level: event.level, label: event.label, sentAt: event.sent_at };
+    writeFileAtomic(lastPath(home), JSON.stringify(last));
+  } catch {
+    // Only status --last needs it.
+  }
+}
+
+export function lastEvent(home: string): LastEvent | null {
+  try {
+    const last = JSON.parse(readFileSync(lastPath(home), "utf8")) as Partial<LastEvent>;
+    return typeof last.id === "string" && typeof last.sentAt === "number" ? (last as LastEvent) : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

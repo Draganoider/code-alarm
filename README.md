@@ -89,6 +89,9 @@ reason. If it forgets, the alarm still rings when it stops, labelled *stopped*.
 `code-alarm status` shows what's set up, what's armed and the last alerts. `code-alarm disarm`
 cancels arming.
 
+Codex's hooks run their own copy of code-alarm. After you update code-alarm, `status` says if
+that copy is out of date, and `init`, `pair`, `unpair` and `use` update it for you.
+
 ## How it works
 
 ```mermaid
@@ -122,3 +125,7 @@ To try your working copy in Claude Code: `claude --plugin-dir plugins/claude-cod
 ## License
 
 [MIT](LICENSE). Not affiliated with Anthropic or OpenAI.
+
+The CLI bundles Project Nayuki's [QR Code generator library](https://www.nayuki.io/page/qr-code-generator-library)
+(MIT), to draw the pairing QR in the terminal. Its notice is kept in `cli/src/vendor/qrcodegen.ts`
+and at the end of the bundle.

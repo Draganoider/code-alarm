@@ -6,6 +6,37 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-10-16
+
+### Added
+
+- The Code Alarm app transport, for the Android app now in testing:
+  - `pair <code>` pairs this computer with the phone through the Code Alarm relay. It sends only
+    the code and a name (`--name`, or "Windows PC", "Mac" or "Linux computer"; never the hostname).
+  - `unpair` removes this computer from the phone; `use ntfy|app` switches between the two.
+  - `status --last` shows what the phone did with the last alert: whether it rang, how long after
+    it was sent, and when it was stopped.
+  - Events go to the relay as they are, with the token only in a header. A failed push is retried
+    once with the same ID, which the relay dedupes.
+  - `pair` uses the Code Alarm relay at `https://relay.codealarm.workers.dev`; `--relay` or
+    `CODE_ALARM_RELAY` points it at another one, such as a local test relay.
+
+- QR pairing: `code-alarm pair` with no code shows a QR in the terminal for the Code Alarm app to
+  scan, and pairs once you tap Pair on the phone. The computer makes its own token and sends the
+  relay only its hash. `pair <code>` still takes the code the app shows. The QR is drawn with
+  Project Nayuki's QR Code generator (MIT), bundled with its notice.
+- `docs/protocol-examples.json`: valid and invalid events, the contract the CLI and the Code Alarm
+  relay both test against. `protocol.md` now states the rules exactly: the label's characters, the
+  ID's form, the one-hour lifetime and the clock skew the relay allows.
+
+### Fixed
+
+- Codex's hooks run their own copy of the CLI, made by `install codex`, and an old copy can't read
+  settings a newer version wrote: its alerts stopped silently. `status` now says when that copy is
+  older than, or different from, the code-alarm you're running. `init`, `pair`, `unpair` and
+  `use` update it, unless it's the newer one. Only the copy changes, so Codex doesn't ask to trust
+  the hooks again. The bundle's banner now carries the version.
+
 ## [0.1.0] — 2026-10-14
 
 ### Added

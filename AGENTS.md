@@ -27,8 +27,8 @@ Mishchenko.
    `UserPromptSubmit` hook's stdout into the prompt, and Codex reads a `PermissionRequest` hook's
    stdout as a decision.
 4. **Never decide a permission.** The Codex `PermissionRequest` hook only observes.
-5. **Never commit secrets.** A user's config (ntfy topic, token) lives in their config folder, never
-   in a repository. Never log the topic or a token.
+5. **Never commit secrets.** A user's config (ntfy topic, tokens, the app pairing's token) lives in
+   their config folder, never in a repository. Never print or log the topic or a token.
 6. **Never promise guaranteed delivery** in docs or output. Push is best-effort.
 7. **No attribution trailers** in commits or pull requests: no `Co-Authored-By`, no "Generated
    with".
@@ -37,7 +37,7 @@ Mishchenko.
 
 | Path | Contents |
 |---|---|
-| `cli/src/` | The CLI: `main.ts` (commands), `hook.ts` (hook and signal logic), `state.ts` (arming), `events.ts` (protocol), `ntfy.ts`, `deliver.ts` (detached sending), `install.ts` (Codex), `skill.ts` (the alarm skill's text) |
+| `cli/src/` | The CLI: `main.ts` (commands), `hook.ts` (hook and signal logic), `state.ts` (arming), `events.ts` (protocol), `ntfy.ts`, `app.ts` (pairing and the Code Alarm app's relay), `qr.ts` (the pairing QR; the encoder in `vendor/` is Project Nayuki's, MIT, kept as is), `deliver.ts` (detached sending), `install.ts` (Codex), `skill.ts` (the alarm skill's text) |
 | `cli/test/` | `node:test` suites; the privacy and hook tests are the important ones |
 | `cli/dist/code-alarm.mjs` | The bundled CLI, **committed** and built by `cli/build.mjs`; also the npm package's entry |
 | `plugins/claude-code/` | The Claude Code plugin: manifest, hooks, the skill (generated) and `bin/` (the bundle plus PATH shims) |

@@ -1,13 +1,15 @@
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { DEFAULT_NTFY_SERVER, ConfigError, isValidTopic, loadConfig, newTopic, saveConfig } from "./config.js";
-import { decodeEvent, logLine, recentLog, sendDetached, sendNow, waitDetached } from "./deliver.js";
+import { type PairingAsk, askToPair, defaultName, describeDelivery, fetchDelivery, pairWithPhone, pollPairing, relayUrl, unpairFromPhone } from "./app.js";
+import { type AppConfig, type Config, DEFAULT_NTFY_SERVER, ConfigError, isValidTopic, loadConfig, newTopic, removeConfig, saveConfig } from "./config.js";
+import { decodeEvent, lastEvent, logLine, recentLog, sendDetached, sendNow, waitDetached } from "./deliver.js";
 import { HOUR, MAX_ARM_MS, formatDuration, parseDuration } from "./duration.js";
 import { type Agent, buildEvent, labelFor } from "./events.js";
 import { type Deps, type HookAgent, PENDING_WAIT_MS, type SignalKind, firePending, runHook, runSignal, sessionFromEnv } from "./hook.js";
-import { codexInstalled, installCodex, uninstallCodex } from "./install.js";
+import { codexCopy, codexInstalled, describeCodexCopy, installCodex, refreshCodexCopy, uninstallCodex } from "./install.js";
 import { alarmHome } from "./paths.js";
+import { qrForTerminal } from "./qr.js";
 import { skillMarkdown } from "./skill.js";
 import { armNap, armProject, disarmAll, disarmProject, listArmings } from "./state.js";
 
@@ -23,13 +25,21 @@ Setup
   code-alarm test [--notify]     Ring the phone now (or send a plain notification)
   code-alarm install codex       Add Code Alarm's hooks and skill to Codex (uninstall codex removes them)
 
+The Code Alarm app (in testing)
+  code-alarm pair [<code>] [--name NAME] [--relay URL]
+                                 Pair with your phone: shows a QR to scan in the app, or takes the
+                                 code the app shows. Alerts then go through the app
+  code-alarm unpair              Remove this computer from the phone
+  code-alarm use ntfy|app        Switch between ntfy and the app when both are set up
+
 Arming (only armed work rings)
   code-alarm arm [--for 12h] [--notify]
                                  Ring when the agent in this folder next finishes, stops or needs you
   code-alarm nap <2h> [--notify] Ring for every session until the time is up
                                  --notify: one ordinary notification instead of the alarm
   code-alarm disarm [--all]      Cancel arming for this folder (or everything)
-  code-alarm status              What's set up, what's armed, the last alerts
+  code-alarm status [--last]     What's set up, what's armed, the last alerts
+                                 --last: what the phone did with the last alert (app only)
 
 Run by the agent (its skill says when)
   code-alarm done | needs-you | failed
@@ -73,8 +83,44 @@ function detectAgent(env: NodeJS.ProcessEnv): Agent {
 
 const clock = (ms: number) => new Date(ms).toTimeString().slice(0, 5);
 
+/** The script running now: what `install codex` copies, and what Codex's copy is compared with. */
+const runningScript = () => (process.argv[1] ? resolve(process.argv[1]) : undefined);
+
+/** After saving settings: Codex's hooks run their own copy of the CLI, which must be able to read them. */
+function refreshCodex(home: string): void {
+  const note = refreshCodexCopy(home, homedir(), runningScript());
+  if (note) console.log(note);
+}
+
 function setupHint(): string {
   return "Code Alarm isn't set up on this computer yet. Run `code-alarm init` in a terminal.";
+}
+
+/** How often QR pairing asks the relay whether the phone said yes. CODE_ALARM_POLL_MS is for tests. */
+const POLL_MS = Number(process.env.CODE_ALARM_POLL_MS) || 2500;
+
+/** Shows the QR and waits for the phone to approve it, up to the request's 10 minutes. */
+async function waitForPhone(ask: PairingAsk): Promise<AppConfig | null> {
+  console.log("Open Code Alarm on your phone, tap Pair a computer, then Scan QR code:\n");
+  // Upper case fits QR's compact alphanumeric mode: a smaller code that scans more easily. The
+  // relay's /pair/ page and the app both read it in any case.
+  console.log(qrForTerminal(ask.url.toUpperCase()));
+  console.log(`\n(code ${ask.code}, works once, until ${clock(ask.expiresAt)})`);
+  console.log('No camera? In the app, choose "Show a code instead" and run: code-alarm pair <that code>');
+  console.log("Waiting for your phone… Ctrl-C stops.");
+  let warned = false;
+  while (Date.now() < ask.expiresAt) {
+    await new Promise((done) => setTimeout(done, POLL_MS));
+    const result = await pollPairing(ask, Date.now());
+    if (result.status === "approved") return result.app;
+    if (result.status === "expired") break;
+    if (result.status === "error" && !warned) {
+      console.log(`Still waiting (${result.message}).`);
+      warned = true;
+    }
+  }
+  console.log("The code ran out before a phone approved it. Run `code-alarm pair` again.");
+  return null;
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -123,9 +169,15 @@ export async function main(argv: string[]): Promise<number> {
         args: rest,
         options: { server: { type: "string" }, topic: { type: "string" }, token: { type: "string" }, force: { type: "boolean" } },
       });
-      // --force starts over without reading the old config, which may be the broken thing.
-      const existing = values.force ? null : loadConfig(home);
-      if (existing) {
+      // --force starts over even when the old config can't be read, which may be the broken thing.
+      // A pairing with the app is kept when it can be read.
+      let existing: Config | null = null;
+      try {
+        existing = loadConfig(home);
+      } catch (e) {
+        if (!values.force) throw e;
+      }
+      if (existing?.ntfy && !values.force) {
         console.log(`Already set up: ntfy topic ${existing.ntfy.topic} on ${existing.ntfy.server}.`);
         console.log("Run `code-alarm init --force` to start over with a new topic.");
         return 0;
@@ -133,7 +185,11 @@ export async function main(argv: string[]): Promise<number> {
       const topic = values.topic ?? newTopic();
       if (!isValidTopic(topic)) throw new ConfigError("A topic can only use letters, digits, - and _ (at most 64).");
       const server = (values.server ?? DEFAULT_NTFY_SERVER).replace(/\/+$/, "");
-      saveConfig(home, { version: 1, transport: "ntfy", ntfy: { server, topic, ...(values.token ? { token: values.token } : {}) } });
+      const ntfy = { server, topic, ...(values.token ? { token: values.token } : {}) };
+      const app = existing?.app;
+      saveConfig(home, app ? { version: 1, transport: "app", app, ntfy } : { version: 1, transport: "ntfy", ntfy });
+      refreshCodex(home);
+      if (app) console.log("This computer is paired with the Code Alarm app, which still sends: `code-alarm use ntfy` switches to ntfy.\n");
       console.log(`Code Alarm is set up.
 
   Server: ${server}
@@ -218,13 +274,15 @@ Then connect your agent:
     }
 
     case "status": {
+      const { values } = parseArgs({ args: rest, options: { last: { type: "boolean" } } });
       const config = loadConfig(home);
-      console.log(
-        config
-          ? // Never any part of the topic: people paste this output into bug reports.
-            `Transport: ntfy, ${config.ntfy.server}, topic set${config.ntfy.token ? ", with a token" : ""}`
-          : "Not set up: run `code-alarm init`.",
-      );
+      // Never any part of the topic or the token: people paste this output into bug reports.
+      if (!config) console.log("Not set up: run `code-alarm init`.");
+      else if (config.transport === "app" && config.app) {
+        console.log(`Transport: Code Alarm app, paired as "${config.app.name}" through ${config.app.relay}${config.ntfy ? " (ntfy is set up too)" : ""}`);
+      } else if (config.ntfy) {
+        console.log(`Transport: ntfy, ${config.ntfy.server}, topic set${config.ntfy.token ? ", with a token" : ""}${config.app ? " (paired with the app too)" : ""}`);
+      }
       const now = Date.now();
       const armings = listArmings(home, now);
       console.log(armings.length ? "Armed:" : "Nothing is armed.");
@@ -233,9 +291,20 @@ Then connect your agent:
         const level = arming.level === "notify" ? ", notification only" : "";
         console.log(`  - ${what} until ${clock(arming.until)} (${formatDuration(arming.until - now)} left${level})`);
       }
-      console.log(`Codex hooks: ${codexInstalled(home, homedir()) ? "installed" : "not installed"}`);
+      const copy = describeCodexCopy(codexCopy(home, homedir(), runningScript()));
+      console.log(`Codex hooks: ${codexInstalled(home, homedir()) ? `installed${copy ? `, ${copy}` : ""}` : "not installed"}`);
       const log = recentLog(home, 5);
       if (log.length) console.log(`Last activity:\n${log.map((line) => `  ${line}`).join("\n")}`);
+      if (values.last) {
+        const last = lastEvent(home);
+        if (config?.transport !== "app" || !config.app) console.log("Last alert: --last needs the Code Alarm app; ntfy doesn't report back.");
+        else if (!last) console.log("Last alert: none sent through the app yet.");
+        else {
+          const result = await fetchDelivery(config.app, last.id);
+          const what = `${last.kind}/${last.level} "${last.label}" at ${clock(last.sentAt)}`;
+          console.log(`Last alert: ${what}: ${result.ok ? describeDelivery(result.delivery) : `unknown, ${result.message}`}`);
+        }
+      }
       return 0;
     }
 
@@ -249,13 +318,91 @@ Then connect your agent:
       return 0;
     }
 
+    case "pair": {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { name: { type: "string" }, relay: { type: "string" } },
+      });
+      const code = positionals[0];
+      const relay = relayUrl(values.relay);
+      const name = values.name?.trim() || defaultName();
+      let existing: Config | null = null;
+      try {
+        existing = loadConfig(home);
+      } catch {
+        // A config that can't be read is replaced by the new pairing.
+      }
+      let app: AppConfig;
+      if (code) {
+        // The phone shows a code, and it's typed here.
+        const result = await pairWithPhone(relay, code, name, Date.now());
+        if (!result.ok) {
+          console.log(`Couldn't pair: ${result.message}`);
+          return 1;
+        }
+        app = result.app;
+      } else {
+        // This computer shows a QR, and the phone scans it and approves.
+        const asked = await askToPair(relay, name);
+        if (!asked.ok) {
+          console.log(`Couldn't start pairing: ${asked.message}`);
+          return 1;
+        }
+        const approved = await waitForPhone(asked.ask);
+        if (!approved) return 1;
+        app = approved;
+      }
+      // Pairing again replaces the old pairing, so the phone doesn't keep listing a dead entry.
+      if (existing?.app && existing.app.senderId !== app.senderId) await unpairFromPhone(existing.app);
+      saveConfig(home, { version: 1, transport: "app", app, ...(existing?.ntfy ? { ntfy: existing.ntfy } : {}) });
+      console.log(`Paired. Your phone lists this computer as "${app.name}", and alerts now go through the Code Alarm app.`);
+      refreshCodex(home);
+      if (existing?.ntfy) console.log("Your ntfy settings are kept: `code-alarm use ntfy` switches back.");
+      console.log("Check it with: code-alarm test");
+      return 0;
+    }
+
+    case "unpair": {
+      const config = loadConfig(home);
+      if (!config?.app) {
+        console.log("This computer isn't paired with the Code Alarm app.");
+        return 0;
+      }
+      const result = await unpairFromPhone(config.app);
+      if (config.ntfy) saveConfig(home, { version: 1, transport: "ntfy", ntfy: config.ntfy });
+      else removeConfig(home);
+      refreshCodex(home);
+      console.log(
+        result.ok
+          ? "Unpaired: the phone no longer lists this computer."
+          : `Unpaired here, but the relay didn't hear it (${result.detail}). Remove this computer in the app too.`,
+      );
+      console.log(config.ntfy ? "Alerts go through ntfy again." : "Nothing is set up now: `code-alarm pair <code>` or `code-alarm init` sets it up again.");
+      return 0;
+    }
+
+    case "use": {
+      const target = rest[0];
+      if (target !== "ntfy" && target !== "app") throw new ConfigError("Usage: code-alarm use ntfy|app");
+      const config = loadConfig(home);
+      if (!config?.[target]) {
+        console.log(target === "app" ? "Not paired with the app: run `code-alarm pair <code>`." : "ntfy isn't set up: run `code-alarm init`.");
+        return 1;
+      }
+      saveConfig(home, { ...config, transport: target });
+      console.log(`Alerts now go through ${target === "app" ? "the Code Alarm app" : "ntfy"}.`);
+      refreshCodex(home);
+      return 0;
+    }
+
     case "install":
     case "uninstall": {
       if (rest[0] !== "codex") throw new ConfigError(`Usage: code-alarm ${command} codex`);
-      const script = process.argv[1];
+      const script = runningScript();
       if (command === "install") {
         if (!script) throw new ConfigError("Can't tell where this code-alarm script is.");
-        for (const note of installCodex({ alarmHome: home, userHome: homedir(), bundle: resolve(script), now: Date.now() })) console.log(note);
+        for (const note of installCodex({ alarmHome: home, userHome: homedir(), bundle: script, now: Date.now() })) console.log(note);
         console.log(
           "\nNext: quit Codex completely and start it again. It reads rules only at startup, and closing\n" +
             "its window may leave it running in the background. Then approve (trust) the new hooks when it\n" +
