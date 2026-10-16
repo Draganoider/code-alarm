@@ -125,3 +125,7 @@ To try your working copy in Claude Code: `claude --plugin-dir plugins/claude-cod
 ## License
 
 [MIT](LICENSE). Not affiliated with Anthropic or OpenAI.
+
+The CLI bundles Project Nayuki's [QR Code generator library](https://www.nayuki.io/page/qr-code-generator-library)
+(MIT), to draw the pairing QR in the terminal. Its notice is kept in `cli/src/vendor/qrcodegen.ts`
+and at the end of the bundle.

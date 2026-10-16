@@ -19,6 +19,10 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
   - `pair` uses the Code Alarm relay at `https://relay.codealarm.workers.dev`; `--relay` or
     `CODE_ALARM_RELAY` points it at another one, such as a local test relay.
 
+- QR pairing: `code-alarm pair` with no code shows a QR in the terminal for the Code Alarm app to
+  scan, and pairs once you tap Pair on the phone. The computer makes its own token and sends the
+  relay only its hash. `pair <code>` still takes the code the app shows. The QR is drawn with
+  Project Nayuki's QR Code generator (MIT), bundled with its notice.
 - `docs/protocol-examples.json`: valid and invalid events, the contract the CLI and the Code Alarm
   relay both test against. `protocol.md` now states the rules exactly: the label's characters, the
   ID's form, the one-hour lifetime and the clock skew the relay allows.

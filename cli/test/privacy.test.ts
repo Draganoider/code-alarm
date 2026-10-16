@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { appRequest, defaultName, pairRequest } from "../src/app.js";
+import { appRequest, defaultName, pairRequest, pairingAskRequest } from "../src/app.js";
 import { HOUR } from "../src/duration.js";
 import { EVENT_FIELDS, buildEvent, labelFor } from "../src/events.js";
 import { runHook } from "../src/hook.js";
@@ -75,6 +75,14 @@ test("nothing from the hook payload reaches the relay request either", async () 
   assert.deepEqual(Object.keys(init.headers).sort(), ["authorization", "content-type"]);
   const request = url + JSON.stringify(init);
   for (const secret of SECRETS) assert.ok(!request.includes(secret), `relay request leaks ${secret}`);
+});
+
+test("QR pairing sends a name and a token's hash, never the token or the hostname", () => {
+  const token = "cas_" + "x".repeat(43);
+  const { init } = pairingAskRequest("https://relay.example", defaultName(), token);
+  assert.deepEqual(Object.keys(JSON.parse(init.body!)).sort(), ["name", "token_hash"]);
+  assert.ok(!init.body!.includes(token), "the token never leaves the computer");
+  assert.ok(!init.body!.includes(hostname()), "the hostname would leave the computer");
 });
 
 test("pairing sends the code and a name, never the hostname", () => {

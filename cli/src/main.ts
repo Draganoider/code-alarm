@@ -1,14 +1,15 @@
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { defaultName, describeDelivery, fetchDelivery, pairWithPhone, relayUrl, unpairFromPhone } from "./app.js";
-import { type Config, DEFAULT_NTFY_SERVER, ConfigError, isValidTopic, loadConfig, newTopic, removeConfig, saveConfig } from "./config.js";
+import { type PairingAsk, askToPair, defaultName, describeDelivery, fetchDelivery, pairWithPhone, pollPairing, relayUrl, unpairFromPhone } from "./app.js";
+import { type AppConfig, type Config, DEFAULT_NTFY_SERVER, ConfigError, isValidTopic, loadConfig, newTopic, removeConfig, saveConfig } from "./config.js";
 import { decodeEvent, lastEvent, logLine, recentLog, sendDetached, sendNow, waitDetached } from "./deliver.js";
 import { HOUR, MAX_ARM_MS, formatDuration, parseDuration } from "./duration.js";
 import { type Agent, buildEvent, labelFor } from "./events.js";
 import { type Deps, type HookAgent, PENDING_WAIT_MS, type SignalKind, firePending, runHook, runSignal, sessionFromEnv } from "./hook.js";
 import { codexCopy, codexInstalled, describeCodexCopy, installCodex, refreshCodexCopy, uninstallCodex } from "./install.js";
 import { alarmHome } from "./paths.js";
+import { qrForTerminal } from "./qr.js";
 import { skillMarkdown } from "./skill.js";
 import { armNap, armProject, disarmAll, disarmProject, listArmings } from "./state.js";
 
@@ -25,8 +26,9 @@ Setup
   code-alarm install codex       Add Code Alarm's hooks and skill to Codex (uninstall codex removes them)
 
 The Code Alarm app (in testing)
-  code-alarm pair <code> [--name NAME] [--relay URL]
-                                 Pair with the code the app shows; alerts then go through the app
+  code-alarm pair [<code>] [--name NAME] [--relay URL]
+                                 Pair with your phone: shows a QR to scan in the app, or takes the
+                                 code the app shows. Alerts then go through the app
   code-alarm unpair              Remove this computer from the phone
   code-alarm use ntfy|app        Switch between ntfy and the app when both are set up
 
@@ -92,6 +94,33 @@ function refreshCodex(home: string): void {
 
 function setupHint(): string {
   return "Code Alarm isn't set up on this computer yet. Run `code-alarm init` in a terminal.";
+}
+
+/** How often QR pairing asks the relay whether the phone said yes. CODE_ALARM_POLL_MS is for tests. */
+const POLL_MS = Number(process.env.CODE_ALARM_POLL_MS) || 2500;
+
+/** Shows the QR and waits for the phone to approve it, up to the request's 10 minutes. */
+async function waitForPhone(ask: PairingAsk): Promise<AppConfig | null> {
+  console.log("Open Code Alarm on your phone, tap Pair a computer, then Scan QR code:\n");
+  // Upper case fits QR's compact alphanumeric mode: a smaller code that scans more easily. The
+  // relay's /pair/ page and the app both read it in any case.
+  console.log(qrForTerminal(ask.url.toUpperCase()));
+  console.log(`\n(code ${ask.code}, works once, until ${clock(ask.expiresAt)})`);
+  console.log('No camera? In the app, choose "Show a code instead" and run: code-alarm pair <that code>');
+  console.log("Waiting for your phone… Ctrl-C stops.");
+  let warned = false;
+  while (Date.now() < ask.expiresAt) {
+    await new Promise((done) => setTimeout(done, POLL_MS));
+    const result = await pollPairing(ask, Date.now());
+    if (result.status === "approved") return result.app;
+    if (result.status === "expired") break;
+    if (result.status === "error" && !warned) {
+      console.log(`Still waiting (${result.message}).`);
+      warned = true;
+    }
+  }
+  console.log("The code ran out before a phone approved it. Run `code-alarm pair` again.");
+  return null;
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -296,7 +325,6 @@ Then connect your agent:
         options: { name: { type: "string" }, relay: { type: "string" } },
       });
       const code = positionals[0];
-      if (!code) throw new ConfigError('Usage: code-alarm pair <code> [--name "My laptop"]. The code is in the Code Alarm app on your phone.');
       const relay = relayUrl(values.relay);
       const name = values.name?.trim() || defaultName();
       let existing: Config | null = null;
@@ -305,15 +333,30 @@ Then connect your agent:
       } catch {
         // A config that can't be read is replaced by the new pairing.
       }
-      const result = await pairWithPhone(relay, code, name, Date.now());
-      if (!result.ok) {
-        console.log(`Couldn't pair: ${result.message}`);
-        return 1;
+      let app: AppConfig;
+      if (code) {
+        // The phone shows a code, and it's typed here.
+        const result = await pairWithPhone(relay, code, name, Date.now());
+        if (!result.ok) {
+          console.log(`Couldn't pair: ${result.message}`);
+          return 1;
+        }
+        app = result.app;
+      } else {
+        // This computer shows a QR, and the phone scans it and approves.
+        const asked = await askToPair(relay, name);
+        if (!asked.ok) {
+          console.log(`Couldn't start pairing: ${asked.message}`);
+          return 1;
+        }
+        const approved = await waitForPhone(asked.ask);
+        if (!approved) return 1;
+        app = approved;
       }
       // Pairing again replaces the old pairing, so the phone doesn't keep listing a dead entry.
-      if (existing?.app && existing.app.senderId !== result.app.senderId) await unpairFromPhone(existing.app);
-      saveConfig(home, { version: 1, transport: "app", app: result.app, ...(existing?.ntfy ? { ntfy: existing.ntfy } : {}) });
-      console.log(`Paired. Your phone lists this computer as "${result.app.name}", and alerts now go through the Code Alarm app.`);
+      if (existing?.app && existing.app.senderId !== app.senderId) await unpairFromPhone(existing.app);
+      saveConfig(home, { version: 1, transport: "app", app, ...(existing?.ntfy ? { ntfy: existing.ntfy } : {}) });
+      console.log(`Paired. Your phone lists this computer as "${app.name}", and alerts now go through the Code Alarm app.`);
       refreshCodex(home);
       if (existing?.ntfy) console.log("Your ntfy settings are kept: `code-alarm use ntfy` switches back.");
       console.log("Check it with: code-alarm test");

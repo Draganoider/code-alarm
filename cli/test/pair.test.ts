@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { type IncomingMessage, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -21,6 +22,7 @@ interface Seen {
 
 /** A stand-in for the relay: just enough of its API (docs/protocol.md) to drive the commands. */
 const seen: Seen[] = [];
+const qr = { tokenHash: "", polls: 0 };
 let relay = "";
 const server = createServer(async (req: IncomingMessage, res) => {
   let raw = "";
@@ -32,6 +34,18 @@ const server = createServer(async (req: IncomingMessage, res) => {
     res.end(data === undefined ? "" : JSON.stringify(data));
   };
   const authed = req.headers.authorization === `Bearer ${TOKEN}`;
+  if (req.method === "POST" && req.url === "/v1/pair-requests") {
+    qr.tokenHash = body.token_hash;
+    qr.polls = 0;
+    return reply(201, { id: "r_1", code: "QRC-0DE", url: `${relay}/pair/QRC-0DE`, expires_at: Date.now() + 600_000 });
+  }
+  if (req.method === "GET" && req.url === "/v1/pair-requests/r_1") {
+    const token = (req.headers.authorization ?? "").replace(/^Bearer /, "");
+    if (createHash("sha256").update(token).digest("hex") !== qr.tokenHash) return reply(404, { error: "not_found" });
+    // Pending the first time, as if the owner were still reaching for the phone.
+    if (qr.polls++ === 0) return reply(200, { status: "pending", expires_at: Date.now() + 600_000 });
+    return reply(200, { status: "approved", sender_id: "s_qr", device_id: "d_1", name: "Scanned PC" });
+  }
   if (req.method === "POST" && req.url === "/v1/pair") {
     if (body.code !== "K7Q-4MZ") return reply(404, { error: "invalid_code", message: "That code is wrong or has expired." });
     return reply(201, { sender_id: "s_1", token: TOKEN, device_id: "d_1", name: body.name });
@@ -112,4 +126,22 @@ test("pair refuses a wrong code and a relay that isn't HTTPS, and takes the rela
   assert.equal((await run(["pair", "K7Q-4MZ", "--relay", "http://relay.example"], home)).status, 1);
   assert.equal((await run(["pair", "K7Q-4MZ"], home)).status, 0);
   assert.equal(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).app.relay, relay);
+});
+
+test("pair with no code shows a QR, waits for the phone, and keeps the token it made", async () => {
+  const home = tempDir();
+  const result = await run(["pair", "--relay", relay], home, { CODE_ALARM_POLL_MS: "50" });
+  assert.equal(result.status, 0, result.stdout);
+  assert.match(result.stdout, /Scan QR code/);
+  assert.match(result.stdout, /▀|▄|█/, "a QR made of half blocks");
+  assert.match(result.stdout, /\(code QRC-0DE, works once, until \d\d:\d\d\)/);
+  assert.match(result.stdout, /Paired\. Your phone lists this computer as "Scanned PC"/);
+  const ask = seen.find((s) => s.path === "/v1/pair-requests")!;
+  assert.deepEqual(Object.keys(ask.body as object).sort(), ["name", "token_hash"]);
+  const config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
+  assert.equal(config.transport, "app");
+  assert.equal(config.app.senderId, "s_qr");
+  // The token was made here; only its hash ever went to the relay.
+  assert.equal(createHash("sha256").update(config.app.token).digest("hex"), (ask.body as { token_hash: string }).token_hash);
+  assert.ok(seen.every((s) => !JSON.stringify(s.body ?? "").includes(config.app.token)), "no request body carries the token");
 });

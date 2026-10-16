@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import { ConfigError, type AppConfig } from "./config.js";
 import type { AlarmEvent } from "./events.js";
 import type { SendResult } from "./ntfy.js";
@@ -88,6 +89,85 @@ export async function pairWithPhone(relay: string, code: string, name: string, n
     ok: true,
     app: { relay, deviceId: device_id, senderId: sender_id, token, name: typeof listedAs === "string" ? listedAs : name, pairedAt: now },
   };
+}
+
+/**
+ * QR pairing: this computer makes its own token and sends the relay only its SHA-256, so the token
+ * never leaves the computer. The phone scans the QR and approves; the computer then polls with the
+ * token until the relay says yes.
+ */
+export function newSenderToken(): string {
+  return `cas_${randomBytes(32).toString("base64url")}`;
+}
+
+/** What QR pairing sends: the name to list this computer under, and the hash of its new token. */
+export function pairingAskRequest(relay: string, name: string, token: string): RelayRequest {
+  const tokenHash = createHash("sha256").update(token).digest("hex");
+  return {
+    url: `${relay}/v1/pair-requests`,
+    init: { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name, token_hash: tokenHash }) },
+  };
+}
+
+export interface PairingAsk {
+  relay: string;
+  id: string;
+  /** "K7Q-4MZ": shown under the QR. */
+  code: string;
+  /** What the QR holds. */
+  url: string;
+  expiresAt: number;
+  token: string;
+  name: string;
+}
+
+export async function askToPair(
+  relay: string,
+  name: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ ok: true; ask: PairingAsk } | { ok: false; message: string }> {
+  const token = newSenderToken();
+  let answer: RelayAnswer;
+  try {
+    answer = await call(pairingAskRequest(relay, name, token), fetchImpl, TIMEOUT_MS);
+  } catch (e) {
+    return { ok: false, message: `couldn't reach the relay at ${relay} (${e instanceof Error ? e.name : "error"})` };
+  }
+  const { id, code, url, expires_at } = answer.body;
+  if (answer.status !== 201 || typeof id !== "string" || typeof code !== "string" || typeof url !== "string" || typeof expires_at !== "number") {
+    return { ok: false, message: message(answer) };
+  }
+  return { ok: true, ask: { relay, id, code, url, expiresAt: expires_at, token, name } };
+}
+
+export type PollResult =
+  | { status: "approved"; app: AppConfig }
+  | { status: "pending" }
+  | { status: "expired" }
+  | { status: "error"; message: string };
+
+/** One look at whether the phone approved. A network error is "error": keep waiting and ask again. */
+export async function pollPairing(ask: PairingAsk, now: number, fetchImpl: typeof fetch = fetch): Promise<PollResult> {
+  let answer: RelayAnswer;
+  try {
+    answer = await call(
+      { url: `${ask.relay}/v1/pair-requests/${encodeURIComponent(ask.id)}`, init: { method: "GET", headers: { authorization: `Bearer ${ask.token}` } } },
+      fetchImpl,
+      TIMEOUT_MS,
+    );
+  } catch (e) {
+    return { status: "error", message: `couldn't reach the relay (${e instanceof Error ? e.name : "error"})` };
+  }
+  const { status, sender_id, device_id, name } = answer.body;
+  if (answer.status === 200 && status === "approved" && typeof sender_id === "string" && typeof device_id === "string") {
+    return {
+      status: "approved",
+      app: { relay: ask.relay, deviceId: device_id, senderId: sender_id, token: ask.token, name: typeof name === "string" ? name : ask.name, pairedAt: now },
+    };
+  }
+  if (answer.status === 200 && status === "pending") return { status: "pending" };
+  if (answer.status === 200 && status === "expired") return { status: "expired" };
+  return { status: "error", message: message(answer) };
 }
 
 /** The event request. Its body is exactly the event: nothing else reaches the relay (hard rule 1). */

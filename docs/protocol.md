@@ -99,16 +99,31 @@ relay (`https://relay.codealarm.workers.dev`), which pushes it to the paired And
 Not Disturb, until you press Stop. It rejects expired events and events whose `id` it has already
 seen.
 
-*Pairing.* The app shows a six-character code, valid for 10 minutes and usable once.
-`code-alarm pair <code>` sends the relay exactly two things:
+*Pairing, with a QR.* `code-alarm pair` makes a new 256-bit token on this computer and sends the
+relay exactly two things: the name, and the token's SHA-256. The token itself never leaves the
+computer.
+
+```json
+{ "name": "Windows PC", "token_hash": "3f1c…64 hex characters" }
+```
+
+The relay answers with a code. The CLI shows it as a QR of
+`https://relay.codealarm.workers.dev/pair/<code>`, which works once for 10 minutes. The app scans
+it, shows the computer's name, and pairs only when you tap Pair. Meanwhile the CLI asks the relay
+every few seconds, with the token, whether a phone said yes.
+
+*Pairing, with a typed code.* The app can show a six-character code instead, valid for 10 minutes
+and usable once. `code-alarm pair <code>` sends the relay exactly two things:
 
 ```json
 { "code": "K7Q-4MZ", "name": "Windows PC" }
 ```
 
-The name is how the phone lists this computer: `--name`, or a generic one for the operating system.
-Never the hostname. The relay answers with a token that can ring that one phone and nothing else.
-It lives in your config file (readable only by you), and is never printed or logged. Pairing
+The relay answers with a token. Either way:
+- the name is how the phone lists this computer: `--name`, or a generic one for the operating
+  system, never the hostname;
+- the token can ring that one phone and nothing else;
+- it lives in your config file (readable only by you), and is never printed or logged. Pairing
 switches the transport to the app and keeps any ntfy settings (`code-alarm use ntfy` switches
 back). Code Alarm sends through one transport at a time, never both, which would ring twice.
 
