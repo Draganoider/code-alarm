@@ -89,6 +89,9 @@ reason. If it forgets, the alarm still rings when it stops, labelled *stopped*.
 `code-alarm status` shows what's set up, what's armed and the last alerts. `code-alarm disarm`
 cancels arming.
 
+Codex's hooks run their own copy of code-alarm. After you update code-alarm, `status` says if
+that copy is out of date, and `init`, `pair`, `unpair` and `use` update it for you.
+
 ## How it works
 
 ```mermaid

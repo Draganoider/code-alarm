@@ -23,6 +23,14 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
   relay both test against. `protocol.md` now states the rules exactly: the label's characters, the
   ID's form, the one-hour lifetime and the clock skew the relay allows.
 
+### Fixed
+
+- Codex's hooks run their own copy of the CLI, made by `install codex`, and an old copy can't read
+  settings a newer version wrote: its alerts stopped silently. `status` now says when that copy is
+  older than, or different from, the code-alarm you're running. `init`, `pair`, `unpair` and
+  `use` update it, unless it's the newer one. Only the copy changes, so Codex doesn't ask to trust
+  the hooks again. The bundle's banner now carries the version.
+
 ## [0.1.0] — 2026-10-14
 
 ### Added

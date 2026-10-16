@@ -7,7 +7,7 @@ import { decodeEvent, lastEvent, logLine, recentLog, sendDetached, sendNow, wait
 import { HOUR, MAX_ARM_MS, formatDuration, parseDuration } from "./duration.js";
 import { type Agent, buildEvent, labelFor } from "./events.js";
 import { type Deps, type HookAgent, PENDING_WAIT_MS, type SignalKind, firePending, runHook, runSignal, sessionFromEnv } from "./hook.js";
-import { codexInstalled, installCodex, uninstallCodex } from "./install.js";
+import { codexCopy, codexInstalled, describeCodexCopy, installCodex, refreshCodexCopy, uninstallCodex } from "./install.js";
 import { alarmHome } from "./paths.js";
 import { skillMarkdown } from "./skill.js";
 import { armNap, armProject, disarmAll, disarmProject, listArmings } from "./state.js";
@@ -81,6 +81,15 @@ function detectAgent(env: NodeJS.ProcessEnv): Agent {
 
 const clock = (ms: number) => new Date(ms).toTimeString().slice(0, 5);
 
+/** The script running now: what `install codex` copies, and what Codex's copy is compared with. */
+const runningScript = () => (process.argv[1] ? resolve(process.argv[1]) : undefined);
+
+/** After saving settings: Codex's hooks run their own copy of the CLI, which must be able to read them. */
+function refreshCodex(home: string): void {
+  const note = refreshCodexCopy(home, homedir(), runningScript());
+  if (note) console.log(note);
+}
+
 function setupHint(): string {
   return "Code Alarm isn't set up on this computer yet. Run `code-alarm init` in a terminal.";
 }
@@ -150,6 +159,7 @@ export async function main(argv: string[]): Promise<number> {
       const ntfy = { server, topic, ...(values.token ? { token: values.token } : {}) };
       const app = existing?.app;
       saveConfig(home, app ? { version: 1, transport: "app", app, ntfy } : { version: 1, transport: "ntfy", ntfy });
+      refreshCodex(home);
       if (app) console.log("This computer is paired with the Code Alarm app, which still sends: `code-alarm use ntfy` switches to ntfy.\n");
       console.log(`Code Alarm is set up.
 
@@ -252,7 +262,8 @@ Then connect your agent:
         const level = arming.level === "notify" ? ", notification only" : "";
         console.log(`  - ${what} until ${clock(arming.until)} (${formatDuration(arming.until - now)} left${level})`);
       }
-      console.log(`Codex hooks: ${codexInstalled(home, homedir()) ? "installed" : "not installed"}`);
+      const copy = describeCodexCopy(codexCopy(home, homedir(), runningScript()));
+      console.log(`Codex hooks: ${codexInstalled(home, homedir()) ? `installed${copy ? `, ${copy}` : ""}` : "not installed"}`);
       const log = recentLog(home, 5);
       if (log.length) console.log(`Last activity:\n${log.map((line) => `  ${line}`).join("\n")}`);
       if (values.last) {
@@ -303,6 +314,7 @@ Then connect your agent:
       if (existing?.app && existing.app.senderId !== result.app.senderId) await unpairFromPhone(existing.app);
       saveConfig(home, { version: 1, transport: "app", app: result.app, ...(existing?.ntfy ? { ntfy: existing.ntfy } : {}) });
       console.log(`Paired. Your phone lists this computer as "${result.app.name}", and alerts now go through the Code Alarm app.`);
+      refreshCodex(home);
       if (existing?.ntfy) console.log("Your ntfy settings are kept: `code-alarm use ntfy` switches back.");
       console.log("Check it with: code-alarm test");
       return 0;
@@ -317,6 +329,7 @@ Then connect your agent:
       const result = await unpairFromPhone(config.app);
       if (config.ntfy) saveConfig(home, { version: 1, transport: "ntfy", ntfy: config.ntfy });
       else removeConfig(home);
+      refreshCodex(home);
       console.log(
         result.ok
           ? "Unpaired: the phone no longer lists this computer."
@@ -336,16 +349,17 @@ Then connect your agent:
       }
       saveConfig(home, { ...config, transport: target });
       console.log(`Alerts now go through ${target === "app" ? "the Code Alarm app" : "ntfy"}.`);
+      refreshCodex(home);
       return 0;
     }
 
     case "install":
     case "uninstall": {
       if (rest[0] !== "codex") throw new ConfigError(`Usage: code-alarm ${command} codex`);
-      const script = process.argv[1];
+      const script = runningScript();
       if (command === "install") {
         if (!script) throw new ConfigError("Can't tell where this code-alarm script is.");
-        for (const note of installCodex({ alarmHome: home, userHome: homedir(), bundle: resolve(script), now: Date.now() })) console.log(note);
+        for (const note of installCodex({ alarmHome: home, userHome: homedir(), bundle: script, now: Date.now() })) console.log(note);
         console.log(
           "\nNext: quit Codex completely and start it again. It reads rules only at startup, and closing\n" +
             "its window may leave it running in the background. Then approve (trust) the new hooks when it\n" +
