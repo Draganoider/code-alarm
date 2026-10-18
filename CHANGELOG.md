@@ -6,6 +6,15 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-10-18
+
+### Changed
+
+- When the phone can't be reached because Code Alarm on it was reinstalled or its data cleared
+  (the relay's `phone_unreachable`), `code-alarm test` and the log now say so and how to fix it:
+  pair again with `code-alarm pair`, and remove the old computer in the app. `code-alarm status`
+  repeats it while the last alert since pairing failed that way, since a hook can only log it.
+
 ## [0.2.0] — 2026-10-16
 
 ### Added
@@ -74,5 +83,7 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
   quote safely; `uninstall codex` removes only its own files. The npm package includes the
   license and README. `status` never shows the topic.
 
-[Unreleased]: https://github.com/Draganoider/code-alarm/compare/v0.1.0...test
+[Unreleased]: https://github.com/Draganoider/code-alarm/compare/v0.2.1...test
+[0.2.1]: https://github.com/Draganoider/code-alarm/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/Draganoider/code-alarm/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Draganoider/code-alarm/releases/tag/v0.1.0

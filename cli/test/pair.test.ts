@@ -23,6 +23,8 @@ interface Seen {
 /** A stand-in for the relay: just enough of its API (docs/protocol.md) to drive the commands. */
 const seen: Seen[] = [];
 const qr = { tokenHash: "", polls: 0 };
+/** Answers events the way the relay does once the phone's app was reinstalled. */
+const relayState = { phoneGone: false };
 let relay = "";
 const server = createServer(async (req: IncomingMessage, res) => {
   let raw = "";
@@ -49,6 +51,9 @@ const server = createServer(async (req: IncomingMessage, res) => {
   if (req.method === "POST" && req.url === "/v1/pair") {
     if (body.code !== "K7Q-4MZ") return reply(404, { error: "invalid_code", message: "That code is wrong or has expired." });
     return reply(201, { sender_id: "s_1", token: TOKEN, device_id: "d_1", name: body.name });
+  }
+  if (req.method === "POST" && req.url === "/v1/events" && authed && relayState.phoneGone) {
+    return reply(503, { status: "failed", error: "phone_unreachable", message: "FCM no longer knows the phone. Code Alarm was probably reinstalled or its data cleared: pair this computer again (code-alarm pair)." });
   }
   if (req.method === "POST" && req.url === "/v1/events" && authed) return reply(200, { status: "sent", id: body.id, level: body.level });
   if (req.method === "GET" && req.url?.startsWith("/v1/events/") && authed) {
@@ -116,6 +121,30 @@ test("pair, test, status --last, use and unpair against a relay", async () => {
   const after = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
   assert.equal(after.transport, "ntfy");
   assert.equal(after.app, undefined);
+});
+
+test("a reinstalled phone: test and status say to pair again, until it's paired again", async () => {
+  const home = tempDir();
+  assert.equal((await run(["pair", "K7Q-4MZ"], home)).status, 0);
+  relayState.phoneGone = true;
+  try {
+    const sent = await run(["test"], home);
+    assert.equal(sent.status, 1);
+    assert.match(sent.stdout, /Couldn't send the test: app: phone_unreachable\. The phone can't be reached: Code Alarm on it was probably reinstalled or its data cleared\./);
+    assert.match(sent.stdout, new RegExp(`Pair again with \`code-alarm pair\`, and in the app remove the old "${defaultName()}" if it's still listed[.]`));
+
+    const status = await run(["status"], home);
+    assert.equal(status.status, 0);
+    assert.match(status.stdout, /The last alert didn't reach the phone\. The phone can't be reached: .*reinstalled.*`code-alarm pair`/);
+    assert.ok(!status.stdout.includes(TOKEN));
+  } finally {
+    relayState.phoneGone = false;
+  }
+
+  assert.equal((await run(["pair", "K7Q-4MZ"], home)).status, 0);
+  assert.doesNotMatch((await run(["status"], home)).stdout, /didn't reach the phone/, "pairing again is the fix, so the hint goes");
+  assert.equal((await run(["test"], home)).status, 0);
+  assert.doesNotMatch((await run(["status"], home)).stdout, /didn't reach the phone/);
 });
 
 test("pair refuses a wrong code and a relay that isn't HTTPS, and takes the relay from CODE_ALARM_RELAY", async () => {

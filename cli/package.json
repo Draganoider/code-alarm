@@ -1,6 +1,6 @@
 {
   "name": "code-alarm",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Wake up when Claude Code or Codex finishes or needs you: a real alarm on your phone, from agent hooks.",
   "license": "MIT",
   "author": "Yevhen Mishchenko",
