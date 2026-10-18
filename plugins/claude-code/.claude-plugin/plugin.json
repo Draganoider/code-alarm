@@ -1,6 +1,6 @@
 {
   "name": "code-alarm",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "A real alarm on your phone when Claude Code finishes or needs you. Arm a task with /code-alarm:alarm; only armed work rings.",
   "author": {
     "name": "Yevhen Mishchenko",

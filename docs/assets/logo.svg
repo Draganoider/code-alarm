@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="title">
+  <title id="title">Code Alarm</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF8A3D"/>
+      <stop offset="1" stop-color="#E8364F"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+  <!-- The clock is lifted 6.25 units so bells to legs (29 to 111.5) sit centred in the tile. -->
+  <g transform="translate(0 -6.25)">
+  <!-- bells -->
+  <path d="M24 53 A24 24 0 0 1 48 29 Z" fill="#FFFFFF"/>
+  <path d="M80 29 A24 24 0 0 1 104 53 Z" fill="#FFFFFF"/>
+  <!-- legs -->
+  <path d="M41 97 L33 108 M87 97 L95 108" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round"/>
+  <!-- face -->
+  <circle cx="64" cy="70" r="35" fill="#FFFFFF"/>
+  <!-- terminal prompt: >_ -->
+  <path d="M47 59 L59 70 L47 81" fill="none" stroke="#E8364F" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M65 82 H81" fill="none" stroke="#E8364F" stroke-width="7" stroke-linecap="round"/>
+  </g>
+</svg>

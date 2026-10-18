@@ -1,6 +1,6 @@
 {
   "name": "code-alarm",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Wake up when Claude Code or Codex finishes or needs you: a real alarm on your phone, from agent hooks.",
   "license": "MIT",
   "author": "Yevhen Mishchenko",
@@ -35,7 +35,7 @@
     "build": "node build.mjs",
     "test": "tsc -p tsconfig.test.json && node --test \"build/test/**/*.test.js\"",
     "check": "npm run typecheck && npm test && npm run build",
-    "prepack": "node -e \"for (const f of ['LICENSE', 'README.md']) require('node:fs').copyFileSync('../' + f, f)\""
+    "prepack": "node prepack.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

@@ -42,7 +42,7 @@ Mishchenko.
 | `cli/dist/code-alarm.mjs` | The bundled CLI, **committed** and built by `cli/build.mjs`; also the npm package's entry |
 | `plugins/claude-code/` | The Claude Code plugin: manifest, hooks, the skill (generated) and `bin/` (the bundle plus PATH shims) |
 | `.claude-plugin/marketplace.json` | Makes this repository a Claude Code plugin marketplace |
-| `docs/` | Protocol and agent notes |
+| `docs/` | Protocol and agent notes; `assets/` holds the README's logo and pictures, hand-written SVG that animates on GitHub. `cli/prepack.mjs` points the npm copy of the README at them on GitHub |
 
 ## Working conventions
 
