@@ -6,6 +6,12 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
 
 ## [Unreleased]
 
+### Changed
+
+- A new README: the logo, a picture of an agent finishing and the phone ringing, a diagram of
+  what stays on your computer, both phone apps side by side, a commands table and
+  troubleshooting. On npm its images and links now point at GitHub, so they show there too.
+
 ## [0.2.1] — 2026-10-18
 
 ### Changed

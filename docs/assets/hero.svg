@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" width="1200" height="560" role="img" aria-labelledby="t d">
+  <title id="t">Code Alarm: your agent finishes, your phone rings</title>
+  <desc id="d">A terminal where Claude Code is armed with /code-alarm:alarm, works for 47 minutes and finishes. A dashed line runs to a phone showing Code Alarm's ring screen: Done, web-app, Claude Code finished the task, with a Stop button.</desc>
+  <defs>
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF8A3D"/>
+      <stop offset="1" stop-color="#E8364F"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.83" cy="0.42" r="0.5">
+      <stop offset="0" stop-color="#E8364F" stop-opacity="0.30"/>
+      <stop offset="0.55" stop-color="#E8364F" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#E8364F" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3B1519"/>
+      <stop offset="0.45" stop-color="#1F1619"/>
+      <stop offset="1" stop-color="#18181C"/>
+    </linearGradient>
+    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#FFFFFF" fill-opacity="0.05"/>
+    </pattern>
+    <clipPath id="card"><rect width="1200" height="560" rx="24"/></clipPath>
+    <clipPath id="phoneScreen"><rect x="878" y="42" width="260" height="480" rx="30"/></clipPath>
+    <!-- The logo's clock, white with the >_ prompt, 128 units wide. -->
+    <symbol id="clock" viewBox="0 0 128 128">
+      <g transform="translate(0 -6.25)">
+        <path d="M24 53 A24 24 0 0 1 48 29 Z" fill="#FFFFFF"/>
+        <path d="M80 29 A24 24 0 0 1 104 53 Z" fill="#FFFFFF"/>
+        <path d="M41 97 L33 108 M87 97 L95 108" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round"/>
+        <circle cx="64" cy="70" r="35" fill="#FFFFFF"/>
+        <path d="M47 59 L59 70 L47 81" fill="none" stroke="#E8364F" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M65 82 H81" fill="none" stroke="#E8364F" stroke-width="7" stroke-linecap="round"/>
+      </g>
+    </symbol>
+    <style>
+      .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 16px; }
+      .dim { fill: #7D8190; }
+      .txt { fill: #E6E7EB; }
+      .ok { fill: #3FCB7E; }
+      .hot { fill: #FF7A45; }
+      .path { fill: #7AA2F7; }
+      .flow { stroke-dasharray: 6 8; animation: flow 1.2s linear infinite; }
+      .shake { transform-box: fill-box; transform-origin: 50% 50%; animation: shake 2.4s ease-in-out infinite; }
+      .cursor { animation: blink 1.1s steps(1) infinite; }
+      @keyframes flow { to { stroke-dashoffset: -28; } }
+      @keyframes shake {
+        0%, 62%, 100% { transform: rotate(0deg); }
+        66% { transform: rotate(-1.6deg); } 70% { transform: rotate(1.6deg); }
+        74% { transform: rotate(-1.2deg); } 78% { transform: rotate(1.2deg); }
+        82% { transform: rotate(-0.6deg); } 86% { transform: rotate(0deg); }
+      }
+      @keyframes blink { 50% { opacity: 0; } }
+      @media (prefers-reduced-motion: reduce) { .flow, .shake, .cursor { animation: none; } }
+    </style>
+  </defs>
+
+  <g clip-path="url(#card)">
+    <rect width="1200" height="560" fill="#111216"/>
+    <rect width="1200" height="560" fill="url(#dots)"/>
+    <rect width="1200" height="560" fill="url(#glow)"/>
+  </g>
+  <rect x="0.5" y="0.5" width="1199" height="559" rx="23.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.08"/>
+
+  <!-- Terminal -->
+  <g>
+    <rect x="44" y="56" width="736" height="448" rx="14" fill="#1A1C22" stroke="#2C2F38"/>
+    <path d="M44 70 A14 14 0 0 1 58 56 H766 A14 14 0 0 1 780 70 V96 H44 Z" fill="#20232B"/>
+    <line x1="44" y1="96" x2="780" y2="96" stroke="#2C2F38"/>
+    <circle cx="70" cy="76" r="6.5" fill="#FF5F57"/>
+    <circle cx="92" cy="76" r="6.5" fill="#FEBC2E"/>
+    <circle cx="114" cy="76" r="6.5" fill="#28C840"/>
+    <text x="412" y="81" text-anchor="middle" class="sans" font-size="14" fill="#8A8E9C">web-app — claude</text>
+
+    <g class="mono">
+      <text x="72" y="140"><tspan class="path">~/web-app</tspan><tspan class="dim"> $ </tspan><tspan class="txt">claude</tspan></text>
+      <text x="72" y="178"><tspan class="hot">&gt; </tspan><tspan class="txt">/code-alarm:alarm add rate limiting, then make the tests pass</tspan></text>
+      <text x="72" y="216"><tspan class="hot">● </tspan><tspan class="txt">Armed "web-app". I'll ring your phone when I'm done.</tspan></text>
+
+      <line x1="72" y1="246" x2="300" y2="246" stroke="#3A3E4A" stroke-dasharray="3 5"/>
+      <text x="412" y="251" text-anchor="middle" class="sans" font-size="13" fill="#8A8E9C" letter-spacing="1.5">47 MIN LATER</text>
+      <line x1="524" y1="246" x2="752" y2="246" stroke="#3A3E4A" stroke-dasharray="3 5"/>
+
+      <text x="72" y="290"><tspan class="dim">● </tspan><tspan class="txt">Edit </tspan><tspan class="dim">src/middleware/rate-limit.ts</tspan></text>
+      <text x="72" y="324"><tspan class="dim">● </tspan><tspan class="txt">Bash </tspan><tspan class="dim">npm test</tspan></text>
+      <text x="72" y="356"><tspan class="dim">&#160;&#160;└ </tspan><tspan class="ok">128 passing</tspan><tspan class="dim"> (4.2s)</tspan></text>
+      <text x="72" y="398"><tspan class="ok">● </tspan><tspan class="txt">Done: rate limiting is in, and all 128 tests pass.</tspan></text>
+      <text x="72" y="440"><tspan class="dim">&#160;&#160;└ </tspan><tspan class="hot">code-alarm done</tspan><tspan class="dim">  →  ringing your phone</tspan></text>
+      <rect x="72" y="460" width="10" height="20" fill="#E6E7EB" class="cursor"/>
+    </g>
+  </g>
+
+  <!-- The alert leaves the terminal for the phone -->
+  <path d="M592 434 C 700 434, 760 300, 864 290" fill="none" stroke="url(#brand)" stroke-width="3" stroke-linecap="round" class="flow"/>
+  <circle cx="592" cy="434" r="5" fill="#FF8A3D"/>
+
+  <!-- Phone -->
+  <g class="shake">
+    <rect x="866" y="30" width="284" height="504" rx="42" fill="#0A0A0D" stroke="#34363F" stroke-width="2"/>
+    <g clip-path="url(#phoneScreen)">
+      <rect x="878" y="42" width="260" height="480" fill="url(#screen)"/>
+      <text x="1008" y="112" text-anchor="middle" class="sans" font-size="46" font-weight="300" fill="#FFFFFF">13:05</text>
+
+      <circle cx="1008" cy="218" r="44" fill="#E8364F" fill-opacity="0.25">
+        <animate attributeName="r" values="44;92" dur="2.4s" repeatCount="indefinite"/>
+        <animate attributeName="fill-opacity" values="0.35;0" dur="2.4s" repeatCount="indefinite"/>
+      </circle>
+      <circle cx="1008" cy="218" r="44" fill="#E8364F" fill-opacity="0.25">
+        <animate attributeName="r" values="44;92" dur="2.4s" begin="1.2s" repeatCount="indefinite"/>
+        <animate attributeName="fill-opacity" values="0.35;0" dur="2.4s" begin="1.2s" repeatCount="indefinite"/>
+      </circle>
+      <circle cx="1008" cy="218" r="44" fill="#A8432F"/>
+      <use href="#clock" x="970" y="180" width="76" height="76"/>
+
+      <rect x="963" y="290" width="90" height="30" rx="15" fill="#1F3A2C"/>
+      <circle cx="981" cy="305" r="5" fill="#3FCB7E"/>
+      <text x="1019" y="311" text-anchor="middle" class="sans" font-size="15" font-weight="600" fill="#7FE0A6">Done</text>
+      <text x="1008" y="360" text-anchor="middle" class="sans" font-size="26" font-weight="700" fill="#FFFFFF">web-app</text>
+      <text x="1008" y="388" text-anchor="middle" class="sans" font-size="14" fill="#C4C5CC">Claude Code finished the task.</text>
+
+      <rect x="900" y="420" width="216" height="46" rx="23" fill="#EF4A4A"/>
+      <text x="1008" y="450" text-anchor="middle" class="sans" font-size="19" font-weight="700" fill="#FFFFFF">Stop</text>
+      <rect x="900.75" y="476.75" width="214.5" height="32.5" rx="16.25" fill="none" stroke="#9A9BA3" stroke-width="1.5"/>
+      <text x="1008" y="498" text-anchor="middle" class="sans" font-size="13" font-weight="600" fill="#E6E7EB">Snooze 5 min</text>
+    </g>
+  </g>
+</svg>
