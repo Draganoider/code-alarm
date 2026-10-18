@@ -89,6 +89,10 @@ reason. If it forgets, the alarm still rings when it stops, labelled *stopped*.
 `code-alarm status` shows what's set up, what's armed and the last alerts. `code-alarm disarm`
 cancels arming.
 
+If you reinstall Code Alarm on your phone or clear its data, the phone registers afresh and this
+computer's pairing stops reaching it. `code-alarm status` and `code-alarm test` say so: pair again
+with `code-alarm pair`, and remove the old computer from the app's list.
+
 Codex's hooks run their own copy of code-alarm. After you update code-alarm, `status` says if
 that copy is out of date, and `init`, `pair`, `unpair` and `use` update it for you.
 

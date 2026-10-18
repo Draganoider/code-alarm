@@ -32,6 +32,21 @@ export function recentLog(home: string, count: number): string[] {
   }
 }
 
+export interface LoggedSend {
+  at: number;
+  ok: boolean;
+  detail: string;
+}
+
+/** The newest send in the log, sent or failed, for `status` to explain a failure the hook could only log. */
+export function lastSend(home: string): LoggedSend | null {
+  for (const line of recentLog(home, 200).reverse()) {
+    const match = /^(\S+) \S+\/\S+ \S+ ".*" (sent|FAILED) \((.*)\)$/.exec(line);
+    if (match) return { at: Date.parse(match[1]!), ok: match[2] === "sent", detail: match[3]! };
+  }
+  return null;
+}
+
 /** Sends and waits for the answer: for `code-alarm test`, and inside the detached sender. */
 export async function sendNow(home: string, event: AlarmEvent, fetchImpl?: typeof fetch): Promise<SendResult> {
   const config = loadConfig(home);

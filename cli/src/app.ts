@@ -183,6 +183,18 @@ export function appRequest(event: AlarmEvent, app: AppConfig): RelayRequest {
 }
 
 /**
+ * The relay's `phone_unreachable`: the push service no longer knows the phone this computer is
+ * paired with. Almost always the app was reinstalled or its data cleared, which registers the
+ * phone afresh and leaves every old pairing pointing at the old registration.
+ */
+export function phoneUnreachableAdvice(name: string): string {
+  return (
+    "The phone can't be reached: Code Alarm on it was probably reinstalled or its data cleared. " +
+    `Pair again with \`code-alarm pair\`, and in the app remove the old "${name}" if it's still listed`
+  );
+}
+
+/**
  * Sends one event. A network error or a failed push is retried once with the same ID: the relay
  * dedupes by ID, so a retry can never ring twice.
  */
@@ -208,6 +220,7 @@ export async function sendApp(
       return { ok: true, detail: answer.body.limited ? "app: sent as a notification (rate limit)" : "app: sent" };
     }
     if (answer.status === 401) return { ok: false, detail: "this computer isn't paired any more: run `code-alarm pair`" };
+    if (answer.body.error === "phone_unreachable") return { ok: false, detail: `app: phone_unreachable. ${phoneUnreachableAdvice(app.name)}` };
     result = { ok: false, detail: `app: ${typeof answer.body.error === "string" ? answer.body.error : `HTTP ${answer.status}`}` };
     if (answer.status !== 502) return result;
   }

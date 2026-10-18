@@ -1,9 +1,9 @@
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { type PairingAsk, askToPair, defaultName, describeDelivery, fetchDelivery, pairWithPhone, pollPairing, relayUrl, unpairFromPhone } from "./app.js";
+import { type PairingAsk, askToPair, defaultName, describeDelivery, fetchDelivery, pairWithPhone, phoneUnreachableAdvice, pollPairing, relayUrl, unpairFromPhone } from "./app.js";
 import { type AppConfig, type Config, DEFAULT_NTFY_SERVER, ConfigError, isValidTopic, loadConfig, newTopic, removeConfig, saveConfig } from "./config.js";
-import { decodeEvent, lastEvent, logLine, recentLog, sendDetached, sendNow, waitDetached } from "./deliver.js";
+import { decodeEvent, lastEvent, lastSend, logLine, recentLog, sendDetached, sendNow, waitDetached } from "./deliver.js";
 import { HOUR, MAX_ARM_MS, formatDuration, parseDuration } from "./duration.js";
 import { type Agent, buildEvent, labelFor } from "./events.js";
 import { type Deps, type HookAgent, PENDING_WAIT_MS, type SignalKind, firePending, runHook, runSignal, sessionFromEnv } from "./hook.js";
@@ -295,6 +295,14 @@ Then connect your agent:
       console.log(`Codex hooks: ${codexInstalled(home, homedir()) ? `installed${copy ? `, ${copy}` : ""}` : "not installed"}`);
       const log = recentLog(home, 5);
       if (log.length) console.log(`Last activity:\n${log.map((line) => `  ${line}`).join("\n")}`);
+      if (config?.transport === "app" && config.app) {
+        // A hook can only log a failed send, so this is where a lost alert gets explained. Only a
+        // send since the current pairing counts: pairing again is the fix.
+        const send = lastSend(home);
+        if (send && !send.ok && send.at >= config.app.pairedAt && send.detail.includes("phone_unreachable")) {
+          console.log(`The last alert didn't reach the phone. ${phoneUnreachableAdvice(config.app.name)}.`);
+        }
+      }
       if (values.last) {
         const last = lastEvent(home);
         if (config?.transport !== "app" || !config.app) console.log("Last alert: --last needs the Code Alarm app; ntfy doesn't report back.");

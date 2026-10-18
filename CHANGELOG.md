@@ -6,6 +6,13 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
 
 ## [Unreleased]
 
+### Changed
+
+- When the phone can't be reached because Code Alarm on it was reinstalled or its data cleared
+  (the relay's `phone_unreachable`), `code-alarm test` and the log now say so and how to fix it:
+  pair again with `code-alarm pair`, and remove the old computer in the app. `code-alarm status`
+  repeats it while the last alert since pairing failed that way, since a hook can only log it.
+
 ## [0.2.0] — 2026-10-16
 
 ### Added

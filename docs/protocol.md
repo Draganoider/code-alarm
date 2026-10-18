@@ -137,7 +137,8 @@ isn't plain characters, and an event that lives longer than an hour or has expir
 | 200 `{"status": "duplicate"}` | Done: the phone already has that `id`, so it won't ring again |
 | 502 `push_failed` | Tries once more, with the same event |
 | 401 | This computer was removed on the phone: pair again |
-| 400, 410, 429, 503 | Logs it. 429 means over 60 events in an hour; 503 means the phone needs to open the app once |
+| 503 `phone_unreachable` | Logs that the phone's app was probably reinstalled or its data cleared, and to pair again; `test` prints it and `status` repeats it until this computer pairs again or a later send gets through |
+| 400, 410, 429 | Logs it. 429 means over 60 events in an hour |
 
 *Status.* `code-alarm status --last` asks `GET <relay>/v1/events/<id>` what the phone did with the
 last alert: whether it rang, how long after it was sent, and when it was stopped. The relay keeps

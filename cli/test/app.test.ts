@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { appRequest, defaultName, describeDelivery, fetchDelivery, pairWithPhone, relayUrl, sendApp, unpairFromPhone } from "../src/app.js";
 import { type AppConfig, ConfigError, configPath, loadConfig, saveConfig } from "../src/config.js";
-import { lastEvent, sendNow } from "../src/deliver.js";
+import { lastEvent, lastSend, logLine, sendNow } from "../src/deliver.js";
 import { buildEvent } from "../src/events.js";
 import { tempDir } from "./helpers.js";
 
@@ -120,7 +120,7 @@ test("sendApp doesn't retry what a retry can't fix", async () => {
     [json(410, { error: "expired" }), /app: expired/],
     [json(400, { error: "invalid_event" }), /app: invalid_event/],
     [json(429, { error: "rate_limited" }), /app: rate_limited/],
-    [json(503, { error: "phone_unreachable" }), /app: phone_unreachable/],
+    [json(503, { error: "phone_unreachable" }), /app: phone_unreachable\. .*reinstalled or its data cleared.*`code-alarm pair`.*"Windows PC"/],
   ] as const) {
     const fake = fakeFetch(answer);
     const result = await sendApp(event(), APP, fake.impl, { retryDelayMs: 0 });
@@ -166,6 +166,36 @@ test("sendNow uses the app when paired, never ntfy as well, and remembers the ev
   const log = readFileSync(join(home, "log.txt"), "utf8");
   assert.match(log, /done\/alarm claude-code "my-project" sent \(app: sent\)/);
   assert.ok(!log.includes(APP.token));
+});
+
+test("a phone that was reinstalled: the log says what to do, and lastSend finds it", async () => {
+  const home = tempDir();
+  saveConfig(home, { version: 1, transport: "app", app: APP });
+  const fake = fakeFetch(json(503, { status: "failed", error: "phone_unreachable", message: "FCM no longer knows the phone." }));
+  const result = await sendNow(home, event(), fake.impl);
+  assert.equal(result.ok, false);
+  logLine(home, "hook claude Stop: done queued");
+  const send = lastSend(home)!;
+  assert.equal(send.ok, false);
+  assert.match(send.detail, /^app: phone_unreachable\. The phone can't be reached: .*reinstalled.*`code-alarm pair`.*"Windows PC"/);
+  assert.ok(Math.abs(send.at - Date.now()) < 60_000);
+  assert.ok(!readFileSync(join(home, "log.txt"), "utf8").includes(APP.token));
+});
+
+test("lastSend reads the newest send, including 0.2.0's lines, and skips hook notes", () => {
+  const home = tempDir();
+  assert.equal(lastSend(home), null);
+  writeFileSync(
+    join(home, "log.txt"),
+    [
+      '2026-10-18T09:00:00.000Z done/alarm claude-code "my (odd) project" sent (app: sent)',
+      '2026-10-18T09:05:00.000Z done/alarm codex "code-alarm" FAILED (app: phone_unreachable)',
+      "2026-10-18T09:05:01.000Z hook codex Stop: skipped, already handled for this turn",
+    ].join("\n") + "\n",
+  );
+  assert.deepEqual(lastSend(home), { at: Date.parse("2026-10-18T09:05:00.000Z"), ok: false, detail: "app: phone_unreachable" });
+  logLine(home, 'test/alarm cli "test" sent (app: sent)');
+  assert.equal(lastSend(home)?.ok, true);
 });
 
 test("config: an app pairing round-trips next to ntfy, and a half-written one is refused", () => {
