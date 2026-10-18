@@ -53,7 +53,7 @@ const server = createServer(async (req: IncomingMessage, res) => {
     return reply(201, { sender_id: "s_1", token: TOKEN, device_id: "d_1", name: body.name });
   }
   if (req.method === "POST" && req.url === "/v1/events" && authed && relayState.phoneGone) {
-    return reply(503, { status: "failed", error: "phone_unreachable", message: "FCM no longer knows the phone: open Code Alarm on it." });
+    return reply(503, { status: "failed", error: "phone_unreachable", message: "FCM no longer knows the phone. Code Alarm was probably reinstalled or its data cleared: pair this computer again (code-alarm pair)." });
   }
   if (req.method === "POST" && req.url === "/v1/events" && authed) return reply(200, { status: "sent", id: body.id, level: body.level });
   if (req.method === "GET" && req.url?.startsWith("/v1/events/") && authed) {
