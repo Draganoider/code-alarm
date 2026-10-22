@@ -6,7 +6,7 @@
 export function skillMarkdown(cli: string, name: string, allowedTools?: string): string {
   return `---
 name: ${name}
-description: Ring the user's phone with a loud alarm when this task is finished or when you need their input. Use when the user asks to be woken, alarmed, called or pinged when the work is done, says they're going to sleep or stepping away while you work, or invokes this skill directly.
+description: Ring the user's phone with a loud alarm when this task is finished or when you need their input. Use when the user asks to be woken, alarmed, called or pinged when the work is done, says they're going to sleep or stepping away while you work, asks to be woken when their usage limit resets, or invokes this skill directly.
 ${allowedTools ? `allowed-tools: ${allowedTools}\n` : ""}---
 
 # Code Alarm
@@ -32,5 +32,17 @@ project folder's name. Never add task details, code or file paths to them.
 
 If you forget step 3, the alarm still rings when you stop, labelled "stopped". It's less helpful,
 but the user isn't left waiting.
+
+## Wake me when my usage limit resets
+
+This needs no arming, and none of the steps above. Set it up before the limit runs out, because once
+it has, you can't run anything.
+
+1. Find the reset time. Read it if your environment shows usage limits; otherwise ask the user.
+2. With your environment's scheduler (for example the Claude app's scheduled tasks, or a cron in
+   this session), schedule one run for a minute after the reset. Its prompt must stand alone, so
+   include the full command: \`${cli} test\`. Nothing else should run.
+3. Tell the user it rings as a test alarm, and only if the app or session is still open at that
+   time. If you have no scheduler, say so, and suggest their operating system's scheduler.
 `;
 }
