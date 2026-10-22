@@ -6,6 +6,12 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
 
 ## [Unreleased]
 
+### Added
+
+- The alarm skill covers "wake me when my usage limit resets": the agent finds the reset time
+  (or asks), schedules one `code-alarm test` for a minute after it with its own scheduler, and
+  says that it only fires if the app or session is still open then.
+
 ## [0.2.2] — 2026-10-18
 
 ### Changed
