@@ -55,13 +55,14 @@ ring: the **Code Alarm app** or **ntfy**.
 | | Code Alarm app | ntfy |
 |---|---|---|
 | **Phones** | Android | Android and iPhone |
-| **Available** | In closed testing: [join the testers group](https://groups.google.com/g/code-alarm-testers) | Now, free |
+| **Available** | In closed testing: [join the testers group](https://groups.google.com/g/code-alarm-testers), then [become a tester](https://play.google.com/apps/testing/dev.codealarm.app) | Now, free |
 | **How it rings** | A full-screen alarm over the lock screen, on the alarm volume, with Stop and Snooze | ntfy's highest-priority alert, which keeps alerting once you turn that on |
 | **Set up with** | `npx code-alarm pair` and a QR scan | `npx code-alarm init` and a topic subscription |
 
 ### 1. Connect your phone
 
-**With the Code Alarm app.** Once you're in the test, install it from Google Play, then run this
+**With the Code Alarm app.** Once you're in the test, install it from
+[Google Play](https://play.google.com/store/apps/details?id=dev.codealarm.app), then run this
 on your computer:
 
 ```bash

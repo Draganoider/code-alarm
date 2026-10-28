@@ -6,6 +6,11 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
 
 ## [Unreleased]
 
+### Changed
+
+- The README links the app's tester opt-in page and its Google Play listing, next to the
+  testers group.
+
 ## [0.2.3] — 2026-10-22
 
 ### Added
