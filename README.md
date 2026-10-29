@@ -62,8 +62,9 @@ ring: the **Code Alarm app** or **ntfy**.
 ### 1. Connect your phone
 
 **With the Code Alarm app.** Once you're in the test, install it from
-[Google Play](https://play.google.com/store/apps/details?id=dev.codealarm.app), then run this
-on your computer:
+[Google Play](https://play.google.com/store/apps/details?id=dev.codealarm.app). The app takes
+about 10 minutes to show up there after you become a tester; if the link says it isn't
+available, wait a bit and try again. Then run this on your computer:
 
 ```bash
 npx code-alarm pair

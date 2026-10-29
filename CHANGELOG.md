@@ -9,7 +9,7 @@ Notable changes to the `code-alarm` CLI and the Claude Code plugin. The format f
 ### Changed
 
 - The README links the app's tester opt-in page and its Google Play listing, next to the
-  testers group.
+  testers group, and says the app takes about 10 minutes to show up on Play after you opt in.
 
 ## [0.2.3] — 2026-10-22
 
